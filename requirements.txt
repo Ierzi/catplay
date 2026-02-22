@@ -8,8 +8,6 @@ pygame
 # P2P file sharing
 sockets
 
-# UV already packages my project
-
 # Metadata extraction
 mutagen
 
