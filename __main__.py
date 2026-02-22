@@ -79,6 +79,13 @@ class MainWindow(QWidget):
         self.next_button = QPushButton("Next")
         self.next_button.setFixedWidth(150)
         self.next_button.clicked.connect(self.next_song)
+        layout.addWidget(self.next_button)
+
+        # Previous song button
+        self.prev_button = QPushButton("Previous")
+        self.prev_button.setFixedWidth(150)
+        self.prev_button.clicked.connect(self.previous_song) 
+        layout.addWidget(self.prev_button)
 
         # Stop song button
         self.stop_button = QPushButton("Stop")
@@ -218,6 +225,17 @@ class MainWindow(QWidget):
             next_track = self.queue[next_index]
             print(f"Loading next track: {next_track}")
             self.load_metadata_from_path(next_track)
+            self.play_song()
+        else:
+            print("No songs in the queue.")
+    
+    def previous_song(self):
+        if self.queue:
+            current_index = self.queue.index(self.loaded_audio.filename) if self.loaded_audio else -1
+            prev_index = (current_index - 1) % len(self.queue)
+            prev_track = self.queue[prev_index]
+            print(f"Loading previous track: {prev_track}")
+            self.load_metadata_from_path(prev_track)
             self.play_song()
         else:
             print("No songs in the queue.")
