@@ -1,20 +1,24 @@
+from operator import is_
 import sys
 from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QFileDialog, QVBoxLayout
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt
 from pathlib import Path
 from mutagen.mp3 import MP3
+from mutagen.flac import FLAC
 import pygame
 
 class MainWindow(QWidget):
     def __init__(self):
-        # Set basic window propreties
+        # Set basic window propreties and important variables
         super().__init__()
         self.setWindowTitle("CatPlay")
         self.logo = Path(__file__).parent / "assets" / "logo.png"
         self.setWindowIcon(QIcon(str(self.logo)))
         
-        self.loaded_audio = None # This will hold the currently loaded audio file (if any)
+        self.is_playing = False # updates if play or stop is pressed, not pause/resume
+        self.is_paused = False 
+        self.loaded_audio = None 
 
         # Set fixed size
         self.setFixedSize(760, 600) # non resizable
@@ -34,6 +38,14 @@ class MainWindow(QWidget):
 
         layout.addWidget(self.album_cover)
 
+        # Song info labels (title, artist, album)
+        self.title_label = QLabel("Title: ")
+        self.artist_label = QLabel("Artist: ")
+        self.album_label = QLabel("Album: ")
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.artist_label)
+        layout.addWidget(self.album_label)
+
         # Load album cover button
         # (will remove this later when it actually loads album covers from the metadata of the music file)
         self.load_ac_button = QPushButton("Load Album Cover")
@@ -41,8 +53,8 @@ class MainWindow(QWidget):
         self.load_ac_button.clicked.connect(self.load_album_cover)
         layout.addWidget(self.load_ac_button)
 
-        # Load metadata button
-        self.load_metadata_button = QPushButton("Load Metadata")
+        # Load Song button
+        self.load_metadata_button = QPushButton("Load Song")
         self.load_metadata_button.setFixedWidth(150)
         self.load_metadata_button.clicked.connect(self.load_metadata)
         layout.addWidget(self.load_metadata_button)
@@ -53,7 +65,21 @@ class MainWindow(QWidget):
         self.play_button.clicked.connect(self.play_song)
         layout.addWidget(self.play_button)
 
+        # Pause song button
+        self.pause_button = QPushButton("Pause / Resume")
+        self.pause_button.setFixedWidth(150)
+        self.pause_button.clicked.connect(self.toggle_pause)
+        layout.addWidget(self.pause_button)
+
+        # Stop song button
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setFixedWidth(150)
+        self.stop_button.clicked.connect(self.stop_song)
+        layout.addWidget(self.stop_button)
+
         self.setLayout(layout)
+
+
     
     def _set_cover_art(self, cover_art):
         # This function will set the album cover from the cover art data in the metadata
@@ -93,14 +119,62 @@ class MainWindow(QWidget):
                 print(f"Album: {album}")
                 self.loaded_audio = audio # Store the loaded audio file for later use (e.g. for playback)
 
+                self.title_label.setText(f"Title: {title}")
+                self.artist_label.setText(f"Artist: {artist}")
+                self.album_label.setText(f"Album: {album}")
+            elif file_path.endswith(".flac"):
+                audio = FLAC(file_path)
+                print(audio.pprint())
+                title = audio.get("title", ["Unknown Title"])[0]
+                artist = audio.get("artist", ["Unknown Artist"])[0]
+                album = audio.get("album", ["Unknown Album"])[0]
+                cover_art = audio.pictures[0] if audio.pictures else None
+                if cover_art:
+                    self._set_cover_art(cover_art)
+
+                print(f"Title: {title}")
+                print(f"Artist: {artist}")
+                print(f"Album: {album}")
+                self.loaded_audio = audio # Store the loaded audio file for later use (e.g. for playback)
+
+                self.title_label.setText(f"Title: {title}")
+                self.artist_label.setText(f"Artist: {artist}")
+                self.album_label.setText(f"Album: {album}")
+
     def play_song(self):
         if self.loaded_audio:
             pygame.mixer.init()
             pygame.mixer.music.load(self.loaded_audio.filename)
             pygame.mixer.music.play()
+            self.is_playing = True
             print("Playing song...")
         else:
             print("No audio file loaded.")
+
+    def stop_song(self):
+        if self.is_playing:
+            pygame.mixer.music.stop()
+            self.is_playing = False
+            self.is_paused = False
+            print("Stopping song...")
+        else:
+            print("No song is currently playing.")
+
+    def toggle_pause(self):
+        try:
+            if self.is_playing:
+                if self.is_paused:
+                    pygame.mixer.music.unpause()
+                    self.is_paused = False
+                    print("Resuming song...")
+                else:
+                    pygame.mixer.music.pause()
+                    self.is_paused = True
+                    print("Pausing song...")
+            else:
+                print("No song is currently playing.")
+        except pygame.error as e:
+            print(f"Error toggling pause: {e} (is pygame mixer initialized?)")
 
 def main():
     app = QApplication(sys.argv)
