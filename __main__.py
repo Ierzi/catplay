@@ -53,6 +53,12 @@ class MainWindow(QWidget):
         self.play_button.clicked.connect(self.play_song)
         layout.addWidget(self.play_button)
 
+        # Stop song button
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setFixedWidth(150)
+        self.stop_button.clicked.connect(pygame.mixer.music.stop)
+        layout.addWidget(self.stop_button)
+
         self.setLayout(layout)
     
     def _set_cover_art(self, cover_art):
@@ -63,7 +69,6 @@ class MainWindow(QWidget):
         self.album_cover.setPixmap(pixmap)
 
     def load_album_cover(self):
-        # Dialog to select an image file
         file_dialog = QFileDialog()
         file_path, _ = file_dialog.getOpenFileName(self, "Select Album Cover", filter="Image Files (*.png *.jpg *.jpeg *.bmp)")
         if file_path:
@@ -74,7 +79,6 @@ class MainWindow(QWidget):
         print("Image loaded.")
     
     def load_metadata(self):
-        # Dialog to select a music file
         file_dialog = QFileDialog()
         file_path, _ = file_dialog.getOpenFileName(self, "Select Music File", filter="Audio Files (*.mp3 *.flac *.wav *.ogg)")
         if file_path:
@@ -91,7 +95,7 @@ class MainWindow(QWidget):
                 print(f"Title: {title}")
                 print(f"Artist: {artist}")
                 print(f"Album: {album}")
-                self.loaded_audio = audio # Store the loaded audio file for later use (e.g. for playback)
+                self.loaded_audio = audio 
 
     def play_song(self):
         if self.loaded_audio:
