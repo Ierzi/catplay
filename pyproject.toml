@@ -1,0 +1,7 @@
+[project]
+name = "catplay"
+version = "0.1.0"
+description = "python music player idk"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []

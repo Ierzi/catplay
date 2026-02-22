@@ -1,0 +1,14 @@
+# GUI
+pyside6 # imma try qt, might regret it
+
+# Audio player
+pygame
+
+# P2P file sharing
+sockets
+
+# UV already packages my project
+
+# Metadata extraction
+mutagen
+
