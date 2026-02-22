@@ -1,5 +1,6 @@
 # GUI
-pyside6 # imma try qt, might regret it
+PySide6 # imma try qt, might regret it
+shiboken6
 
 # Audio player
 pygame
