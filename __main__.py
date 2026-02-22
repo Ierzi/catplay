@@ -18,6 +18,7 @@ class MainWindow(QWidget):
         self.is_playing = False # updates if play or stop is pressed, not pause/resume
         self.is_paused = False 
         self.loaded_audio = None 
+        self.queue = []
 
         # Set fixed size
         self.setFixedSize(250, 600) # non resizable
@@ -73,6 +74,11 @@ class MainWindow(QWidget):
         self.pause_button.setFixedWidth(150)
         self.pause_button.clicked.connect(self.toggle_pause)
         layout.addWidget(self.pause_button)
+
+        # Next song button
+        self.next_button = QPushButton("Next")
+        self.next_button.setFixedWidth(150)
+        self.next_button.clicked.connect(self.next_song)
 
         # Stop song button
         self.stop_button = QPushButton("Stop")
@@ -196,13 +202,25 @@ class MainWindow(QWidget):
     
             audio_files.sort() # Sort files alphabetically
             print(audio_files)
+
+        self.queue = audio_files 
         
         # Load first track
         if audio_files:
             first_track = audio_files[0]
             print(f"Loading first track: {first_track}")
             self.load_metadata_from_path(first_track)
-        
+    
+    def next_song(self):
+        if self.queue:
+            current_index = self.queue.index(self.loaded_audio.filename) if self.loaded_audio else -1
+            next_index = (current_index + 1) % len(self.queue)
+            next_track = self.queue[next_index]
+            print(f"Loading next track: {next_track}")
+            self.load_metadata_from_path(next_track)
+            self.play_song()
+        else:
+            print("No songs in the queue.")
 
 def main():
     app = QApplication(sys.argv)
