@@ -1,6 +1,5 @@
-from operator import is_
 import sys
-from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QFileDialog, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt
 from pathlib import Path
@@ -21,7 +20,7 @@ class MainWindow(QWidget):
         self.loaded_audio = None 
 
         # Set fixed size
-        self.setFixedSize(760, 600) # non resizable
+        self.setFixedSize(250, 600) # non resizable
 
         # Create layout
         layout = QVBoxLayout()
@@ -39,12 +38,9 @@ class MainWindow(QWidget):
         layout.addWidget(self.album_cover)
 
         # Song info labels (title, artist, album)
-        self.title_label = QLabel("Title: ")
-        self.artist_label = QLabel("Artist: ")
-        self.album_label = QLabel("Album: ")
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.artist_label)
-        layout.addWidget(self.album_label)
+        self.info_label = QLabel("No song loaded")
+        self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop) # Align the info label to the top left corner
+        layout.addWidget(self.info_label)
 
         # Load album cover button
         # (will remove this later when it actually loads album covers from the metadata of the music file)
@@ -58,6 +54,13 @@ class MainWindow(QWidget):
         self.load_metadata_button.setFixedWidth(150)
         self.load_metadata_button.clicked.connect(self.load_metadata)
         layout.addWidget(self.load_metadata_button)
+
+        # Load folder button
+        # (loads an entire folder, sorts and plays in order)
+        self.load_folder_button = QPushButton("Load Folder")
+        self.load_folder_button.setFixedWidth(150)
+        self.load_folder_button.clicked.connect(self.load_folder)
+        layout.addWidget(self.load_folder_button)
 
         # Play song button
         self.play_button = QPushButton("Play")
@@ -98,11 +101,9 @@ class MainWindow(QWidget):
             self.album_cover.setPixmap(pixmap)
         
         print("Image loaded.")
-    
-    def load_metadata(self):
-        # Dialog to select a music file
-        file_dialog = QFileDialog()
-        file_path, _ = file_dialog.getOpenFileName(self, "Select Music File", filter="Audio Files (*.mp3 *.flac *.wav *.ogg)")
+
+    def load_metadata_from_path(self, file_path: str):
+        print(f"Loading metadata from: {file_path}")
         if file_path:
             if file_path.endswith(".mp3"):
                 audio = MP3(file_path)
@@ -119,9 +120,8 @@ class MainWindow(QWidget):
                 print(f"Album: {album}")
                 self.loaded_audio = audio # Store the loaded audio file for later use (e.g. for playback)
 
-                self.title_label.setText(f"Title: {title}")
-                self.artist_label.setText(f"Artist: {artist}")
-                self.album_label.setText(f"Album: {album}")
+                self.info_label.setText(f"Title: {title}\nArtist: {artist}\nAlbum: {album}")
+
             elif file_path.endswith(".flac"):
                 audio = FLAC(file_path)
                 print(audio.pprint())
@@ -137,9 +137,13 @@ class MainWindow(QWidget):
                 print(f"Album: {album}")
                 self.loaded_audio = audio # Store the loaded audio file for later use (e.g. for playback)
 
-                self.title_label.setText(f"Title: {title}")
-                self.artist_label.setText(f"Artist: {artist}")
-                self.album_label.setText(f"Album: {album}")
+                self.info_label.setText(f"Title: {title}\nArtist: {artist}\nAlbum: {album}")
+
+    def load_metadata(self):
+        # Dialog to select a music file
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getOpenFileName(self, "Select Music File", filter="Audio Files (*.mp3 *.flac *.wav *.ogg)")
+        self.load_metadata_from_path(file_path)
 
     def play_song(self):
         if self.loaded_audio:
@@ -175,6 +179,30 @@ class MainWindow(QWidget):
                 print("No song is currently playing.")
         except pygame.error as e:
             print(f"Error toggling pause: {e} (is pygame mixer initialized?)")
+
+    def load_folder(self):
+        # Dialog to select a folder
+        folder_dialog = QFileDialog()
+        folder_dialog.setFileMode(QFileDialog.FileMode.Directory)
+        folder_path = folder_dialog.getExistingDirectory(self, "Select Music Folder")
+        if folder_path:
+            print(f"Selected folder: {folder_path}")
+            # Sort alphabetically and load all supported audio files in the folder
+            audio_paths: list[Path] = []
+            for ext in ("*.mp3", "*.flac", "*.wav", "*.ogg"):
+                audio_paths.extend(Path(folder_path).glob(ext))
+
+            audio_files = [str(path) for path in audio_paths]
+    
+            audio_files.sort() # Sort files alphabetically
+            print(audio_files)
+        
+        # Load first track
+        if audio_files:
+            first_track = audio_files[0]
+            print(f"Loading first track: {first_track}")
+            self.load_metadata_from_path(first_track)
+        
 
 def main():
     app = QApplication(sys.argv)
