@@ -11,3 +11,5 @@ sockets
 # Metadata extraction
 mutagen
 
+# Discord RPC
+pypresence
