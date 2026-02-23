@@ -1,9 +1,6 @@
 # GUI
-PySide6 # imma try qt, might regret it
+pyside6
 shiboken6
-
-# Audio player
-pygame
 
 # P2P file sharing
 sockets
@@ -13,3 +10,5 @@ mutagen
 
 # Discord RPC
 pypresence
+dotenv
+requsts # deezer api

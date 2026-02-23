@@ -1,5 +1,6 @@
+from functools import lru_cache
 import sys
-from typing import Any
+from typing import Any, Optional
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout, QSlider, QGridLayout, QHBoxLayout, QDialog, QLineEdit
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QIcon, QPixmap
@@ -12,8 +13,11 @@ from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB
 # from mutagen.wave import WAVE
 import random
 from pypresence import Presence
+from pypresence.types import ActivityType
 from dotenv import load_dotenv
 import os
+import time
+import requests
 
 # TODO: Volume control
 # TODO: Discord RPC
@@ -43,9 +47,22 @@ class AudioMetadata:
 def load_metadata(file_path: str) -> AudioMetadata:
     if file_path.endswith(".mp3"):
         audio = MP3(file_path)
-        title = audio.get("TIT2", "Unknown Title")
-        artist = audio.get("TPE1", "Unknown Artist")
-        album = audio.get("TALB", "Unknown Album")
+
+        def _text_from_tag(tag, default: str = "Unknown") -> str:
+            if tag is None:
+                return default
+            # mutagen ID3 frames usually expose a .text list
+            if hasattr(tag, "text"):
+                try:
+                    return tag.text[0] if tag.text else default
+                except Exception:
+                    return str(tag)
+            # fallback to string conversion
+            return str(tag)
+
+        title = _text_from_tag(audio.get("TIT2"), "Unknown Title")
+        artist = _text_from_tag(audio.get("TPE1"), "Unknown Artist")
+        album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
         return AudioMetadata(title, artist, album, cover, audio)
 
@@ -237,12 +254,16 @@ class MainWindow(QWidget):#
         self.is_playing = False # updates if play or stop is pressed, not pause/resume
         self.is_paused = False 
         self.queue = []
+        self.start_song = 0
+        self.last_position = 0
 
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
 
         self.player.setAudioOutput(self.audio_output)
         self.player.mediaStatusChanged.connect(self.handle_media_status)
+        self.player.playbackStateChanged.connect(self.handle_state_change)
+
 
         # Set fixed size
         self.setFixedSize(800, 600) # non resizable
@@ -392,11 +413,64 @@ class MainWindow(QWidget):#
         self.song_pb.setRange(0, duration)
         self.total_time_label.setText(self.format_time(duration))
 
+        self.update_rpc(loaded_audio.title, loaded_audio.artist, loaded_audio.album, duration)
+
     def update_position(self, position):
         if not self.song_pb.isSliderDown():
             self.song_pb.setValue(position)
 
-        self.current_time_label.setText(self.format_time(position))
+        formatted_time = self.format_time(position)
+        self.current_time_label.setText(formatted_time)
+
+        delta = abs(position - self.last_position)
+
+        # If jump is larger than 2 seconds, assume user skipped.
+        # Only update RPC if we have loaded audio metadata.
+        if delta > 2000 and loaded_audio:
+            self.update_rpc(loaded_audio.title, loaded_audio.artist, loaded_audio.album, self.player.duration())
+        
+        self.last_position = position
+
+    @lru_cache(maxsize=50)
+    def get_ac_link(self, artist, track_title, album_name) -> Optional[str]:
+        # Deezer API yay
+        query = f"{artist} {track_title}"
+        url = f"https://api.deezer.com/search?q={query}"
+        response = requests.get(url)
+        if not response.status_code == 200:
+            print("Error fetching album cover from Deezer API")
+            return None
+        
+        data = response.json()['data'][0]
+        print(data)
+        ac_link = data['album']['cover_xl'] if data['album'] else None
+
+        # Double check if the album name matches, since the search is not always accurate
+        if data['album'] and album_name.lower() not in data['album']['title'].lower():
+            print("Album name does not match, skipping album cover")
+            return None
+
+        return ac_link
+
+    def update_rpc(self, track_title, artist, album_name, duration_ms):
+        global RPC
+
+        start_time = int(time.time()) 
+        end_time = start_time + (duration_ms // 1000)
+
+        # Get image for the current track's album cover
+        link = self.get_ac_link(artist, track_title, album_name)
+
+        RPC.update(
+            activity_type=ActivityType.LISTENING,
+            details=track_title,
+            state=f"by {artist}",
+            start=start_time,
+            end=end_time,
+            large_image=link or "logo", # Fallback to default logo if no cover art is found
+            small_image="logo" if link else None,
+            large_text=album_name
+        )
 
     def set_position(self, position):
         self.player.setPosition(position)
@@ -436,6 +510,7 @@ class MainWindow(QWidget):#
             self.player.play()
             self.is_playing = True
             self.is_paused = False
+            self.start_song = int(time.time())
             print("Playing song...")
         else:
             print("No audio file loaded.")
@@ -518,6 +593,13 @@ class MainWindow(QWidget):#
     def handle_media_status(self, status):
         if status == QMediaPlayer.MediaStatus.EndOfMedia and self.queue:
             self.next_song()
+    
+    def handle_state_change(self, state):
+        global loaded_audio
+        if state == QMediaPlayer.PlaybackState.PlayingState and loaded_audio:
+            self.update_rpc(loaded_audio.title, loaded_audio.artist, loaded_audio.album, self.player.duration())
+        elif state in (QMediaPlayer.PlaybackState.PausedState, QMediaPlayer.PlaybackState.StoppedState):
+            RPC.clear()
     
     def edit_metadata_popup(self):
         global loaded_audio
