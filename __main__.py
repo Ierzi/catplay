@@ -18,10 +18,11 @@ from dotenv import load_dotenv
 import os
 import time
 import requests
+from pylast import LastFMNetwork
 
 # TODO: Volume control
 # TODO: Discord RPC
-# TODO: Last.fm scrobbling
+# TODO: Last.fm scrobbling, love track
 # TODO: Queue management
 # TODO: A vinyl view for the album cover, with a disc spinning would be so cool
 # TODO: Genius link to get lyrics
@@ -34,6 +35,11 @@ RPC.connect()
 
 loaded_audio = None
 
+SERP_API_KEY = os.getenv("SERP_API_KEY")
+
+LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
+LASTFM_API_SECRET = os.getenv("LASTFM_API_SECRET")
+lastfm_client = LastFMNetwork(api_key=LASTFM_API_KEY, api_secret=LASTFM_API_SECRET)
 
 class AudioMetadata:
     def __init__(self, title: str, artist: str, album: str, cover: Any, audio: Any):
@@ -243,13 +249,24 @@ class MetadataPopup(QDialog):
     
         loaded_audio = AudioMetadata(self.title, self.artist, self.album, self.album_cover_path, self.audio)
 
-class MainWindow(QWidget):#
+class MainWindow(QWidget):
     def __init__(self):
         # Set basic window propreties and important variables
         super().__init__()
         self.setWindowTitle("CatPlay")
         self.logo = Path(__file__).parent / "assets" / "logo.png"
-        self.setWindowIcon(QIcon(str(self.logo)))
+        self.rare_logo = Path(__file__).parent / "assets" / "rare_logo.png"
+        self.evil_logo = Path(__file__).parent / "assets" / "evil_logo.png"
+
+        chance = random.random()
+        if chance < 0.01:
+            logo = self.evil_logo
+        elif chance < 0.1:
+            logo = self.rare_logo
+        else:
+            logo = self.logo
+
+        self.setWindowIcon(QIcon(str(logo)))
         
         self.is_playing = False # updates if play or stop is pressed, not pause/resume
         self.is_paused = False 
@@ -327,19 +344,6 @@ class MainWindow(QWidget):#
 
         button_layout.addLayout(time_layout, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # Load Song button
-        self.load_metadata_button = QPushButton("Load Song")
-        self.load_metadata_button.setFixedWidth(150)
-        self.load_metadata_button.clicked.connect(self.load_metadata)
-        button_layout.addWidget(self.load_metadata_button, 1, 0)
-
-        # Load folder button
-        # (loads an entire folder, sorts and plays in order)
-        self.load_folder_button = QPushButton("Load Folder")
-        self.load_folder_button.setFixedWidth(150)
-        self.load_folder_button.clicked.connect(self.load_folder)
-        button_layout.addWidget(self.load_folder_button, 1, 1)
-
         # Play song button
         self.play_button = QPushButton("Play")
         self.play_button.setFixedWidth(387)
@@ -354,13 +358,13 @@ class MainWindow(QWidget):#
 
         # Previous song button
         self.prev_button = QPushButton("Previous")
-        self.prev_button.setFixedWidth(150)
+        self.prev_button.setFixedWidth(190)
         self.prev_button.clicked.connect(self.previous_song) 
         button_layout.addWidget(self.prev_button, 4, 0)
 
         # Next song button
         self.next_button = QPushButton("Next")
-        self.next_button.setFixedWidth(150)
+        self.next_button.setFixedWidth(190)
         self.next_button.clicked.connect(self.next_song)
         button_layout.addWidget(self.next_button, 4, 1)
 
@@ -381,6 +385,22 @@ class MainWindow(QWidget):#
 
         # * External layout
         # Manual metadata edit button
+        load_layout = QHBoxLayout()
+
+        # Load Song button
+        self.load_metadata_button = QPushButton("Load Song")
+        self.load_metadata_button.setFixedWidth(190)
+        self.load_metadata_button.clicked.connect(self.load_metadata)
+        load_layout.addWidget(self.load_metadata_button)
+
+        # Load folder button
+        self.load_folder_button = QPushButton("Load Folder")
+        self.load_folder_button.setFixedWidth(190)
+        self.load_folder_button.clicked.connect(self.load_folder)
+        load_layout.addWidget(self.load_folder_button)
+
+        external_layout.addLayout(load_layout)
+
         self.manual_metadata = QPushButton("Edit Metadata")
         self.manual_metadata.setFixedWidth(387)
         self.manual_metadata.clicked.connect(self.edit_metadata_popup)
@@ -433,23 +453,44 @@ class MainWindow(QWidget):#
 
     @lru_cache(maxsize=50)
     def get_ac_link(self, artist, track_title, album_name) -> Optional[str]:
-        # Deezer API yay
+        # * Deezer API yay
         query = f"{artist} {track_title}"
         url = f"https://api.deezer.com/search?q={query}"
         response = requests.get(url)
-        if not response.status_code == 200:
+        if response.status_code == 200:
+        
+            data = response.json()['data'][0]
+            print(data)
+            ac_link = data['album']['cover_xl'] if data['album'] else None
+
+            # Double check if the album name matches, since the search is not always accurate
+            if data['album'] and album_name.lower() not in data['album']['title'].lower():
+                print("Album name does not match, skipping album cover")
+                ac_link = None
+        else:
             print("Error fetching album cover from Deezer API")
+
+        if ac_link:
+            return ac_link
+
+        # * Last.fm API
+        global lastfm_client
+        album = lastfm_client.get_album(artist, album_name)
+        
+        cover = album.get_cover_image() if album else None
+
+        if cover:
+            return cover
+
+        # * ...google images api??
+        response = requests.get(f"https://serpapi.com/search.json?q={artist} {album_name} album cover&tbm=isch&ijn=0&api_key={SERP_API_KEY}")
+        if response.status_code != 200:
+            print("Error fetching album cover from SerpAPI")
             return None
         
-        data = response.json()['data'][0]
-        print(data)
-        ac_link = data['album']['cover_xl'] if data['album'] else None
+        data = response.json()
 
-        # Double check if the album name matches, since the search is not always accurate
-        if data['album'] and album_name.lower() not in data['album']['title'].lower():
-            print("Album name does not match, skipping album cover")
-            return None
-
+        ac_link = data.get("images_results", [])[0].get("thumbnail") if data.get("images_results") else None
         return ac_link
 
     def update_rpc(self, track_title, artist, album_name, duration_ms):

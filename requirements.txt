@@ -12,3 +12,6 @@ mutagen
 pypresence
 dotenv
 requsts # deezer api
+
+# Last.fm API
+pylast
