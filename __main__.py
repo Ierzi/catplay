@@ -1,7 +1,7 @@
 from functools import lru_cache
 import sys
 from typing import Any, Optional
-from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout, QSlider, QGridLayout, QHBoxLayout, QDialog, QLineEdit
+from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout, QSlider, QGridLayout, QHBoxLayout, QDialog, QLineEdit, QListWidget
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt, QUrl
@@ -210,18 +210,19 @@ class MetadataPopup(QDialog):
             self.audio.tags.add(TIT2(encoding=3, text=self.title))
             self.audio.tags.add(TPE1(encoding=3, text=self.artist))
             self.audio.tags.add(TALB(encoding=3, text=self.album))
-            
-            image_type = "image/jpeg" if self.album_cover_path.endswith((".jpg", ".jpeg")) else "image/png"
-            with open(self.album_cover_path, "rb") as img:
-                self.audio.tags.add(
-                    APIC(
-                    encoding=3,
-                    mime=image_type,
-                    type=3,
-                    desc="Cover",
-                    data=img.read()
+
+            if self.album_cover_path:
+                image_type = "image/jpeg" if self.album_cover_path.endswith((".jpg", ".jpeg")) else "image/png"
+                with open(self.album_cover_path, "rb") as img:
+                    self.audio.tags.add(
+                        APIC(
+                        encoding=3,
+                        mime=image_type,
+                        type=3,
+                        desc="Cover",
+                        data=img.read()
+                        )
                     )
-                )
             
             self.audio.save()
             print("MP3 metadata updated.")
@@ -234,18 +235,35 @@ class MetadataPopup(QDialog):
             self.audio["artist"] = self.artist
             self.audio["album"] = self.album
             
-            pic = Picture()
-            pic.type = 3
-            pic.mime = "image/jpeg" if self.album_cover_path.endswith((".jpg", ".jpeg")) else "image/png"
-            pic.desc = "Cover"
+            if self.album_cover_path:
+                pic = Picture()
+                pic.type = 3
+                pic.mime = "image/jpeg" if self.album_cover_path.endswith((".jpg", ".jpeg")) else "image/png"
+                pic.desc = "Cover"
+                
+                with open(self.album_cover_path, "rb") as img:
+                    pic.data = img.read()
             
-            with open(self.album_cover_path, "rb") as img:
-                pic.data = img.read()
-            
-            self.audio.clear_pictures()
-            self.audio.add_picture(pic)
+                self.audio.clear_pictures()
+                self.audio.add_picture(pic)
+
             self.audio.save()
             print("FLAC metadata updated.")
+        
+        elif self.filename.endswith(".m4a"):
+            self.audio = MP4(self.filename)
+
+            self.audio["©nam"] = self.title
+            self.audio["©ART"] = self.artist
+            self.audio["©alb"] = self.album
+
+            if self.album_cover_path:
+                with open(self.album_cover_path, "rb") as img:
+                    cover_data = img.read()
+                self.audio["covr"] = [cover_data]
+
+            self.audio.save()
+            print("M4A metadata updated.")
     
         loaded_audio = AudioMetadata(self.title, self.artist, self.album, self.album_cover_path, self.audio)
 
@@ -271,6 +289,7 @@ class MainWindow(QWidget):
         self.is_playing = False # updates if play or stop is pressed, not pause/resume
         self.is_paused = False 
         self.queue = []
+        self.pretty_queue = [] # Song name - Artist
         self.start_song = 0
         self.last_position = 0
 
@@ -331,7 +350,7 @@ class MainWindow(QWidget):
         self.song_pb.sliderMoved.connect(self.set_position)
 
         button_layout.addWidget(self.song_pb, 0, 0)
-
+        
         # Song time label
         self.current_time_label = QLabel("0:00")
         self.slash_bar = QLabel(" / ")
@@ -343,6 +362,24 @@ class MainWindow(QWidget):
         time_layout.addWidget(self.total_time_label)
 
         button_layout.addLayout(time_layout, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # Volume control slider 
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        # Default volume is 50%
+        self.volume_slider.setValue(50) 
+        self.audio_output.setVolume(0.5) # Set initial volume to 50%
+
+        self.volume_slider.setFixedWidth(250)
+
+        # Connect volume slider to audio output
+        self.volume_slider.valueChanged.connect(lambda v: self.audio_output.setVolume(v / 100))
+
+        self.volume_text = QLabel("50%")
+        self.audio_output.volumeChanged.connect(lambda: self.volume_text.setText(f"{int(self.audio_output.volume() * 100)}%"))
+
+        button_layout.addWidget(self.volume_slider, 1, 0)
+        button_layout.addWidget(self.volume_text, 1, 1, alignment=Qt.AlignmentFlag.AlignRight)
 
         # Play song button
         self.play_button = QPushButton("Play")
@@ -371,7 +408,7 @@ class MainWindow(QWidget):
         # Shuffle button 
         self.shuffle_button = QPushButton("Shuffle")
         self.shuffle_button.setFixedWidth(387)
-        self.shuffle_button.clicked.connect(lambda: random.shuffle(self.queue))
+        self.shuffle_button.clicked.connect(self.shuffle_queue)
         button_layout.addWidget(self.shuffle_button, 5, 0)
 
         # Stop song button
@@ -404,13 +441,41 @@ class MainWindow(QWidget):
         self.manual_metadata = QPushButton("Edit Metadata")
         self.manual_metadata.setFixedWidth(387)
         self.manual_metadata.clicked.connect(self.edit_metadata_popup)
+
         external_layout.addWidget(self.manual_metadata, alignment=Qt.AlignmentFlag.AlignTop)
+
+        # Queue editor list
+        self.queue_editor = QListWidget()
+        self.queue_editor.setFixedWidth(387)
+        self.queue_editor.setFixedHeight(300)
+
+        # Proprieties
+        self.queue_editor.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.queue_editor.model().rowsMoved.connect(self.reorder_queue)
+
+
+        external_layout.addWidget(self.queue_editor)
 
         layout.addLayout(main_layout)
         layout.addLayout(external_layout)
 
         self.setLayout(layout)
 
+    def reorder_queue(self, source_parent, source_start, source_end, dest_parent, dest_row):
+        # This function will reorder the queue based on the new order of the items in the queue editor list
+        if source_start == dest_row or source_start == dest_row - 1:
+            return  # No change in order
+
+        moved_item = self.queue.pop(source_start)
+        if source_start < dest_row:
+            self.queue.insert(dest_row - 1, moved_item)
+        else:
+            self.queue.insert(dest_row, moved_item)
+
+        print(f"{self.queue=}")
+
+        self.update_pretty_queue()
+    
 
     def _set_cover_art(self, cover_art):
         # This function will set the album cover from the cover art data in the metadata
@@ -450,6 +515,29 @@ class MainWindow(QWidget):
             self.update_rpc(loaded_audio.title, loaded_audio.artist, loaded_audio.album, self.player.duration())
         
         self.last_position = position
+
+    def shuffle_queue(self):
+        if self.queue:
+            self.queue.pop(self.queue.index(loaded_audio.filename)) 
+            random.shuffle(self.queue)
+            self.queue.insert(0, loaded_audio.filename)
+            self.update_pretty_queue()
+            print("Queue shuffled.")
+        else:
+            print("No songs in the queue to shuffle.")
+    
+    def update_pretty_queue(self):
+        global loaded_audio
+        self.pretty_queue = []
+        for track in self.queue:
+            if track == loaded_audio.filename:
+                self.pretty_queue.append(f"> {loaded_audio.title} - {loaded_audio.artist} <")
+            else:
+                audio = load_metadata(track)
+                self.pretty_queue.append(f"{audio.title} - {audio.artist}")
+        
+        self.queue_editor.clear()
+        self.queue_editor.addItems(self.pretty_queue)
 
     @lru_cache(maxsize=50)
     def get_ac_link(self, artist, track_title, album_name) -> Optional[str]:
@@ -607,6 +695,8 @@ class MainWindow(QWidget):
             print(f"Loading first track: {first_track}")
             self.load_metadata_from_path(first_track)
     
+        self.update_pretty_queue()
+
     def next_song(self):
         global loaded_audio
         if self.queue:
@@ -616,6 +706,7 @@ class MainWindow(QWidget):
             print(f"Loading next track: {next_track}")
             self.load_metadata_from_path(next_track)
             self.play_song()
+            self.update_pretty_queue()
         else:
             print("No songs in the queue.")
     
@@ -628,6 +719,7 @@ class MainWindow(QWidget):
             print(f"Loading previous track: {prev_track}")
             self.load_metadata_from_path(prev_track)
             self.play_song()
+            self.update_pretty_queue()
         else:
             print("No songs in the queue.")
 
