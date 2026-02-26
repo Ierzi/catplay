@@ -21,13 +21,17 @@ import requests
 from pylast import LastFMNetwork
 
 # TODO: Volume control
-# TODO: Discord RPC
 # TODO: Last.fm scrobbling, love track
 # TODO: Queue management
 # TODO: A vinyl view for the album cover, with a disc spinning would be so cool
 # TODO: Genius link to get lyrics
 
-load_dotenv()
+def ressource_path(relative_path: Path) -> str:
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    base_path = Path(getattr(sys, '_MEIPASS', Path(__file__).parent.absolute()))
+    return str(base_path / relative_path)
+
+load_dotenv(ressource_path(".env"))
 DISCORD_APP_ID = os.getenv("DISCORD_APP_ID")
 
 RPC = Presence(DISCORD_APP_ID)
