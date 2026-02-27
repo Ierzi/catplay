@@ -10,7 +10,7 @@ from mutagen.mp4 import MP4
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import ID3, APIC, TIT2, TPE1, TALB
-# from mutagen.wave import WAVE
+from mutagen.wave import WAVE
 import random
 from pypresence import Presence
 from pypresence.types import ActivityType
@@ -53,7 +53,12 @@ class AudioMetadata:
         self.cover = cover
         self.audio = audio
         self.filename = audio.filename
+        self._make_unique_hash = str(cover) + str(audio)
+    
+    def __hash__(self):
+        return hash((self.title, self.artist, self.album, self.filename, self._make_unique_hash))
 
+@lru_cache(maxsize=128)
 def load_metadata(file_path: str) -> AudioMetadata:
     if file_path.endswith(".mp3"):
         audio = MP3(file_path)
@@ -92,6 +97,11 @@ def load_metadata(file_path: str) -> AudioMetadata:
         album = audio.get("©alb", ["Unknown Album"])[0]
         cover = audio.get("covr", [None])[0] if audio.get("covr") else None
         return AudioMetadata(title, artist, album, cover, audio)
+
+    elif file_path.endswith(".wav"):
+        audio = WAVE(file_path)
+
+        return AudioMetadata("Unknown Title", "Unknown Artist", "Unknown Album", None, audio) #what
 
 class MetadataPopup(QDialog):
     def __init__(self):
