@@ -15,10 +15,8 @@ import random
 from pypresence import Presence
 from pypresence.types import ActivityType
 from dotenv import load_dotenv
-import os
 import time
 import requests
-from pylast import LastFMNetwork
 
 # TODO: Volume control
 # TODO: Last.fm scrobbling, love track
@@ -32,18 +30,11 @@ def ressource_path(relative_path: Path) -> str:
     return str(base_path / relative_path)
 
 load_dotenv(ressource_path(".env"))
-DISCORD_APP_ID = os.getenv("DISCORD_APP_ID")
 
-RPC = Presence(DISCORD_APP_ID)
+RPC = Presence(1475462488245014568)
 RPC.connect()
 
 loaded_audio = None
-
-SERP_API_KEY = os.getenv("SERP_API_KEY")
-
-LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
-LASTFM_API_SECRET = os.getenv("LASTFM_API_SECRET")
-lastfm_client = LastFMNetwork(api_key=LASTFM_API_KEY, api_secret=LASTFM_API_SECRET)
 
 class AudioMetadata:
     def __init__(self, title: str, artist: str, album: str, cover: Any, audio: Any):
@@ -575,25 +566,21 @@ class MainWindow(QWidget):
         if ac_link:
             return ac_link
 
-        # * Last.fm API
-        global lastfm_client
-        album = lastfm_client.get_album(artist, album_name)
-        
-        cover = album.get_cover_image() if album else None
-
-        if cover:
-            return cover
-
-        # * ...google images api??
-        response = requests.get(f"https://serpapi.com/search.json?q={artist} {album_name} album cover&tbm=isch&ijn=0&api_key={SERP_API_KEY}")
+        # * Ask my API
+        catplay_url = "https://catplay-server-production.up.railway.app/get-album-cover"
+        params = {
+            "artist": artist,
+            "album": album_name,
+        }
+        response = requests.get(catplay_url, params=params)
         if response.status_code != 200:
-            print("Error fetching album cover from SerpAPI")
+            print("Error fetching album cover from CatPlay API")
             return None
         
         data = response.json()
-
-        ac_link = data.get("images_results", [])[0].get("thumbnail") if data.get("images_results") else None
+        ac_link = data.get("cover")
         return ac_link
+
 
     def update_rpc(self, track_title, artist, album_name, duration_ms):
         global RPC
