@@ -3,14 +3,13 @@ pyside6
 shiboken6
 
 # P2P file sharing
-sockets
+# sockets
 
 # Metadata extraction
 mutagen
 
 # Discord RPC
 pypresence
-dotenv
 requsts # deezer api
 
 # Last.fm API

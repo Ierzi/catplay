@@ -24,7 +24,6 @@ from mutagen.wave import WAVE
 import random
 from pypresence import Presence
 from pypresence.types import ActivityType
-from dotenv import load_dotenv
 import time
 import requests
 
@@ -38,8 +37,6 @@ def ressource_path(relative_path: Path) -> str:
     """ Get absolute path to resource, works for dev and for PyInstaller """
     base_path = Path(getattr(sys, '_MEIPASS', Path(__file__).parent.absolute()))
     return str(base_path / relative_path)
-
-load_dotenv(ressource_path(".env"))
 
 RPC = Presence(1475462488245014568)
 RPC.connect()
