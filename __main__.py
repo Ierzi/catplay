@@ -6,6 +6,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt, QUrl
 from pathlib import Path
+import mimetypes
 from mutagen.mp4 import MP4
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
@@ -87,6 +88,14 @@ def load_metadata(file_path: str) -> AudioMetadata:
         artist = _text_from_tag(audio.get("TPE1"), "Unknown Artist")
         album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
+
+        # test print tags
+        for key in audio.keys():
+            if key.startswith("APIC"):
+                print(f"{key}: [Album Cover Data]")
+                continue
+            print(f"{key}: {audio[key]}")
+
         return AudioMetadata(title, artist, album, cover, audio)
 
     elif file_path.endswith(".flac"):
@@ -119,14 +128,14 @@ def load_metadata(file_path: str) -> AudioMetadata:
 class MetadataPopupMP3(QDialog):
     def __init__(self):
         global loaded_audio
-        self.changes = {
-            "title": None,
-            "artist": None,
-            "album": None,
-            "cover": None,
-            "comment": None,
-            "composer": None,
-            "genre": None
+        self.data = {
+            "title": loaded_audio.title,
+            "artist": loaded_audio.artist,
+            "album": loaded_audio.album,
+            "cover": loaded_audio.cover,
+            "comment": loaded_audio.audio.get("COMM").text[0] if loaded_audio.audio.get("COMM") and hasattr(loaded_audio.audio.get("COMM"), "text") and loaded_audio.audio.get("COMM").text else "",
+            "composer": loaded_audio.audio.get("TCOM").text[0] if loaded_audio.audio.get("TCOM") and hasattr(loaded_audio.audio.get("TCOM"), "text") and loaded_audio.audio.get("TCOM").text else "",
+            "genre": loaded_audio.audio.get("TCON").text[0] if loaded_audio.audio.get("TCON") and hasattr(loaded_audio.audio.get("TCON"), "text") and loaded_audio.audio.get("TCON").text else "",
         } #todo: add year, track number, disc number, date
         super().__init__()
 
@@ -250,56 +259,65 @@ class MetadataPopupMP3(QDialog):
 
     def edit_album_cover(self):
         file_dialog = QFileDialog()
-        file_path, _ = file_dialog.getOpenFileName(self, "Select Album Cover", filter="Image Files (*.png *.jpg *.jpeg *.bmp)")
+        file_path, _ = file_dialog.getOpenFileName(self, "Select Album Cover", filter="Image Files (*.png *.jpg *.jpeg)")
         if file_path:
             pixmap = QPixmap(file_path)
             pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.ac_label.setPixmap(pixmap)
-            self.changes["cover"] = file_path
+            self.data["cover"] = file_path
             print("ac updated in popup")
         
     def edit_title(self, text):
-        self.changes["title"] = text
+        self.data["title"] = text
     
     def edit_artist(self, text):
-        self.changes["artist"] = text
+        self.data["artist"] = text
     
     def edit_album(self, text):
-        self.changes["album"] = text
+        self.data["album"] = text
     
     def edit_comment(self, text):
-        self.changes["comment"] = text
+        self.data["comment"] = text
     
     def edit_composer(self, text):
-        self.changes["composer"] = text
+        self.data["composer"] = text
     
     def edit_genre(self, text):
-        self.changes["genre"] = text
+        self.data["genre"] = text
     
     def save(self):
         global loaded_audio
-        if self.changes["title"]:
-            loaded_audio.audio["TIT2"] = TIT2(encoding=3, text=self.changes["title"])
-        if self.changes["artist"]:
-            loaded_audio.audio["TPE1"] = TPE1(encoding=3, text=self.changes["artist"])
-        if self.changes["album"]:
-            loaded_audio.audio["TALB"] = TALB(encoding=3, text=self.changes["album"])
-        if self.changes["cover"]:
-            with open(self.changes["cover"], "rb") as img_file:
-                img_data = img_file.read()
-                loaded_audio.audio["APIC"] = APIC(
-                    encoding=3,
-                    mime="image/jpeg",
-                    type=3, # cover (front)
-                    desc="Cover",
-                    data=img_data
-                )
-        if self.changes["comment"]:
-            loaded_audio.audio["COMM"] = COMM(encoding=3, text=self.changes["comment"])
-        if self.changes["composer"]:
-            loaded_audio.audio["TCOM"] = TCOM(encoding=3, text=self.changes["composer"])
-        if self.changes["genre"]:
-            loaded_audio.audio["TCON"] = TCON(encoding=3, text=self.changes["genre"])
+        loaded_audio.audio.delete() # Clear all tags 
+
+        if self.data["title"]:
+            loaded_audio.audio["TIT2"] = TIT2(encoding=3, text=self.data["title"])
+        if self.data["artist"]:
+            loaded_audio.audio["TPE1"] = TPE1(encoding=3, text=self.data["artist"])
+        if self.data["album"]:
+            loaded_audio.audio["TALB"] = TALB(encoding=3, text=self.data["album"])
+        if self.data["cover"]:
+            if isinstance(self.data["cover"], str):
+                with open(self.data["cover"], "rb") as img_file:
+                    img_data = img_file.read()
+                    mime = mimetypes.guess_type(self.data["cover"])[0] or "image/jpeg"
+                    loaded_audio.audio["APIC"] = APIC(
+                        encoding=3,
+                        mime=mime,
+                        type=3, # cover (front)
+                        desc="",
+                        data=img_data
+                    )
+            
+            else:
+                # APIC
+                loaded_audio.audio["APIC"] = self.data.get("cover")
+
+        if self.data["comment"]:
+            loaded_audio.audio["COMM"] = COMM(encoding=3, text=self.data["comment"])
+        if self.data["composer"]:
+            loaded_audio.audio["TCOM"] = TCOM(encoding=3, text=self.data["composer"])
+        if self.data["genre"]:
+            loaded_audio.audio["TCON"] = TCON(encoding=3, text=self.data["genre"])
         
         loaded_audio.audio.save()
         print("Metadata saved.")
@@ -309,17 +327,19 @@ class MetadataPopupFLAC(QDialog):
     def __init__(self):
         super().__init__()
         
-        self.changes = {
-            "title": None,
-            "artist": None,
-            "albumartist": None,
-            "album": None,
-            "cover": None,
-            "date": None,
-            "year": None,
-            "description": None,
-            "discnumber": None,
-            "tracknumber": None,
+        self.data = {
+            "title": loaded_audio.title,
+            "artist": loaded_audio.artist,
+            "album": loaded_audio.album,
+            "albumartist": loaded_audio.audio.get("albumartist", [""])[0],
+            "cover": loaded_audio.cover,
+            "date": loaded_audio.audio.get("date", [""])[0],
+            "year": loaded_audio.audio.get("year", [""])[0],
+            "description": loaded_audio.audio.get("description", [""])[0],
+            "discnumber": loaded_audio.audio.get("discnumber", [""])[0],
+            "tracknumber": loaded_audio.audio.get("tracknumber", [""])[0],
+            "genre": loaded_audio.audio.get("genre", [""])[0],
+            "composer": loaded_audio.audio.get("composer", [""])[0],
         }
 
         # Window propreties
@@ -445,12 +465,30 @@ class MetadataPopupFLAC(QDialog):
         editing_layout.addWidget(self.track_number_label, 8, 0)
         editing_layout.addWidget(self.track_number_edit, 8, 1)
 
+        # Genre edit field
+        self.genre_label = QLabel("Genre:")
+        self.genre_label.setFixedWidth(80)
+        self.genre_edit = QLineEdit(loaded_audio.audio.get("genre", [""])[0])
+        self.genre_edit.setFixedWidth(200)
+        self.genre_edit.textChanged.connect(self.edit_genre)
+        editing_layout.addWidget(self.genre_label, 9, 0)
+        editing_layout.addWidget(self.genre_edit, 9, 1)
+
+        # Composer edit field
+        self.composer_label = QLabel("Composer:")
+        self.composer_label.setFixedWidth(80)
+        self.composer_edit = QLineEdit(loaded_audio.audio.get("composer", [""])[0])
+        self.composer_edit.setFixedWidth(200)
+        self.composer_edit.textChanged.connect(self.edit_composer)
+        editing_layout.addWidget(self.composer_label, 10, 0)
+        editing_layout.addWidget(self.composer_edit, 10, 1)
+
 
         # Save button
         self.save_button = QPushButton("Save")
         self.save_button.setFixedWidth(125)
         self.save_button.clicked.connect(self.save) # Close the popup when save is clicked
-        editing_layout.addWidget(self.save_button, 10, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        editing_layout.addWidget(self.save_button, 11, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
         layout.addLayout(ac_layout)
         layout.addLayout(editing_layout)
@@ -464,65 +502,86 @@ class MetadataPopupFLAC(QDialog):
             pixmap = QPixmap(file_path)
             pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.ac_label.setPixmap(pixmap)
-            self.changes["cover"] = file_path
+            self.data["cover"] = file_path
             print("ac updated in popup")
     
     def edit_title(self, text):
-        self.changes["title"] = text
+        self.data["title"] = text
     
     def edit_artist(self, text):
-        self.changes["artist"] = text
+        self.data["artist"] = text
     
     def edit_album(self, text):
-        self.changes["album"] = text
+        self.data["album"] = text
     
     def edit_album_artist(self, text):
-        self.changes["albumartist"] = text
+        self.data["albumartist"] = text
     
     def edit_date(self, text):
-        self.changes["date"] = text
+        self.data["date"] = text
     
     def edit_year(self, text):
-        self.changes["year"] = text
+        self.data["year"] = text
     
     def edit_description(self, text):
-        self.changes["description"] = text
+        self.data["description"] = text
     
     def edit_disc_number(self, text):
-        self.changes["discnumber"] = text
+        self.data["discnumber"] = text
     
     def edit_track_number(self, text):
-        self.changes["tracknumber"] = text
+        self.data["tracknumber"] = text
+    
+    def edit_genre(self, text):
+        self.data["genre"] = text
+    
+    def edit_composer(self, text):
+        self.data["composer"] = text
     
     def save(self):
         global loaded_audio
-        if self.changes["title"]:
-            loaded_audio.audio["title"] = [self.changes["title"]]
-        if self.changes["artist"]:
-            loaded_audio.audio["artist"] = [self.changes["artist"]]
-        if self.changes["album"]:
-            loaded_audio.audio["album"] = [self.changes["album"]]
-        if self.changes["albumartist"]:
-            loaded_audio.audio["albumartist"] = [self.changes["albumartist"]]
-        if self.changes["date"]:
-            loaded_audio.audio["date"] = [self.changes["date"]]
-        if self.changes["year"]:
-            loaded_audio.audio["year"] = [self.changes["year"]]
-        if self.changes["description"]:
-            loaded_audio.audio["description"] = [self.changes["description"]]
-        if self.changes["discnumber"]:
-            loaded_audio.audio["discnumber"] = [self.changes["discnumber"]]
-        if self.changes["tracknumber"]:
-            loaded_audio.audio["tracknumber"] = [self.changes["tracknumber"]]
-        if self.changes["cover"]:
-            with open(self.changes["cover"], "rb") as img_file:
-                img_data = img_file.read()
-                picture = Picture()
-                picture.data = img_data
-                picture.type = 3 # cover (front)
-                picture.mime = "image/jpeg"
-                picture.desc = "Cover"
+        loaded_audio.audio.delete() # Clear all tags
+
+        if self.data["title"]:
+            loaded_audio.audio["title"] = [self.data["title"]]
+        if self.data["artist"]:
+            loaded_audio.audio["artist"] = [self.data["artist"]]
+        if self.data["album"]:
+            loaded_audio.audio["album"] = [self.data["album"]]
+        if self.data["albumartist"]:
+            loaded_audio.audio["albumartist"] = [self.data["albumartist"]]
+        if self.data["date"]:
+            loaded_audio.audio["date"] = [self.data["date"]]
+        if self.data["year"]:
+            loaded_audio.audio["year"] = [self.data["year"]]
+        if self.data["description"]:
+            loaded_audio.audio["description"] = [self.data["description"]]
+        if self.data["discnumber"]:
+            loaded_audio.audio["discnumber"] = [self.data["discnumber"]]
+        if self.data["tracknumber"]:
+            loaded_audio.audio["tracknumber"] = [self.data["tracknumber"]]
+        if self.data["genre"]:
+            loaded_audio.audio["genre"] = [self.data["genre"]]
+        if self.data["composer"]:
+            loaded_audio.audio["composer"] = [self.data["composer"]]
+        if self.data["cover"]:
+            if isinstance(self.data["cover"], str):
+                with open(self.data["cover"], "rb") as img_file:
+                    img_data = img_file.read()
+                    picture = Picture()
+                    picture.data = img_data
+                    picture.type = 3 # cover (front)
+                    picture.mime = mimetypes.guess_type(self.data["cover"])[0] or "image/jpeg"
+                    picture.desc = "Cover"
+                    loaded_audio.audio.clear_pictures()
+                    loaded_audio.audio.add_picture(picture)
+            else:
                 loaded_audio.audio.clear_pictures()
+                picture = Picture()
+                picture.data = self.data["cover"].data
+                picture.type = 3 # cover (front)
+                picture.mime = self.data["cover"].mime
+                picture.desc = "Cover"
                 loaded_audio.audio.add_picture(picture)
         
         loaded_audio.audio.save()
@@ -1011,7 +1070,7 @@ class MainWindow(QWidget):
             return
         popup.exec()
 
-        # Refresh metadata after editing
+        load_metadata.cache_clear()
         self.load_metadata_from_path(loaded_audio.filename)
 
 def main():
