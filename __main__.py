@@ -86,13 +86,6 @@ def load_metadata(file_path: str) -> AudioMetadata:
         album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
 
-        # test print tags
-        for key in audio.keys():
-            if key.startswith("APIC"):
-                print(f"{key}: [Album Cover Data]")
-                continue
-            print(f"{key}: {audio[key]}")
-
         return AudioMetadata(title, artist, album, cover, audio)
 
     elif file_path.endswith(".flac"):
@@ -102,10 +95,6 @@ def load_metadata(file_path: str) -> AudioMetadata:
         album = audio.get("album", ["Unknown Album"])[0]
         cover = audio.pictures[0] if audio.pictures else None
 
-        # test print tags
-        for key in audio.keys():
-            print(f"{key}: {audio[key]}")
-
         return AudioMetadata(title, artist, album, cover, audio)
 
     elif file_path.endswith(".m4a"):
@@ -114,10 +103,20 @@ def load_metadata(file_path: str) -> AudioMetadata:
         artist = audio.get("©ART", ["Unknown Artist"])[0]
         album = audio.get("©alb", ["Unknown Album"])[0]
         cover = audio.get("covr", [None])[0] if audio.get("covr") else None
+
+
         return AudioMetadata(title, artist, album, cover, audio)
 
     elif file_path.endswith(".wav"):
         audio = WAVE(file_path)
+
+        # test print tags?
+        for key in audio.keys():
+            if key == "covr":
+                print(f"{key}: [Album Cover Data]")
+                continue
+
+            print(f"{key}: {audio[key]}")
 
         return AudioMetadata("Unknown Title", "Unknown Artist", "Unknown Album", None, audio) #what
 
@@ -320,6 +319,7 @@ class MetadataPopupMP3(QDialog):
         print("Metadata saved.")
         self.close()
 
+# FLAC metadata popup
 class MetadataPopupFLAC(QDialog):
     def __init__(self):
         super().__init__()
@@ -585,6 +585,229 @@ class MetadataPopupFLAC(QDialog):
         print("Metadata saved.")
         self.close()
 
+# M4A metadata popup
+class MetadataPopupM4A(QDialog):
+    def __init__(self) -> None:
+        super().__init__()
+        global loaded_audio
+
+        self.data = {
+            "title": loaded_audio.title,
+            "artist": loaded_audio.artist,
+            "album": loaded_audio.album,
+            "cover": loaded_audio.cover,
+            "tracknumber": loaded_audio.audio.get("trkn", [(0, 0)])[0][0],
+            "totaltracks": loaded_audio.audio.get("trkn", [(0, 0)])[0][1],
+            "discnumber": loaded_audio.audio.get("disk", [(0, 0)])[0][0],
+            "date": loaded_audio.audio.get("©day", [""])[0],
+            "copyright": loaded_audio.audio.get("cprt", [""])[0],
+        }
+
+        # Window propreties
+        self.setWindowTitle("Edit Metadata")
+        self.setWindowIcon(QIcon(ressource_path(Path("assets") / "logo.png"))) # no randomness here
+        self.setFixedSize(600, 300)
+
+        layout = QHBoxLayout()
+
+        # * Album cover layout
+        ac_layout = QVBoxLayout()
+
+        # Album cover widget
+        self.ac_label = QLabel()
+        self.ac_label.setAlignment( Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter) 
+        ac = self.data.get("cover") or (Path(__file__).parent / "assets" / "placeholder.jpg")
+        pixmap = QPixmap()
+
+        if isinstance(ac, Path):
+            pixmap.load(str(ac))
+        else:
+            try:
+                pixmap.loadFromData(ac.data)
+            except Exception as e:
+                print(e)
+                pixmap.loadFromData(ac) # fallback
+        
+        pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.ac_label.setPixmap(pixmap)
+        ac_layout.addWidget(self.ac_label)
+
+        # Edit album cover button
+        self.edit_ac_button = QPushButton("Edit Album Cover")
+        self.edit_ac_button.clicked.connect(self.edit_album_cover)
+        self.edit_ac_button.setFixedWidth(200)
+        ac_layout.addWidget(self.edit_ac_button)
+
+        # * Metadata edit layout
+        me_layout = QGridLayout()
+
+        # Edit title field
+        self.title_label = QLabel("Title:")
+        self.title_label.setFixedWidth(80)
+        self.title_edit = QLineEdit(self.data.get("title"))
+        self.title_edit.setFixedWidth(200)
+        self.title_edit.textChanged.connect(self.edit_title)
+        me_layout.addWidget(self.title_label, 0, 0)
+        me_layout.addWidget(self.title_edit, 0, 1)
+
+        # Artist edit field
+        self.artist_label = QLabel("Artist:")
+        self.artist_label.setFixedWidth(80)
+        self.artist_edit = QLineEdit(self.data.get("artist"))
+        self.artist_edit.setFixedWidth(200)
+        self.artist_edit.textChanged.connect(self.edit_artist)
+
+        me_layout.addWidget(self.artist_label, 1, 0)
+        me_layout.addWidget(self.artist_edit, 1, 1)
+
+        # Album edit field
+        self.album_label = QLabel("Album:")
+        self.album_label.setFixedWidth(80)
+        self.album_edit = QLineEdit(self.data.get("album"))
+        self.album_edit.setFixedWidth(200)
+        self.album_edit.textChanged.connect(self.edit_album)
+
+        me_layout.addWidget(self.album_label, 2, 0)
+        me_layout.addWidget(self.album_edit, 2, 1)
+
+        # Date edit field
+        self.date_label = QLabel("Date:")
+        self.date_label.setFixedWidth(80)
+        self.date_edit = QLineEdit(self.data.get("date"))
+        self.date_edit.setFixedWidth(200)
+        self.date_edit.textChanged.connect(self.edit_date)
+        me_layout.addWidget(self.date_label, 4, 0)
+        me_layout.addWidget(self.date_edit, 4, 1)
+
+        # Track number edit field
+        self.track_number_label = QLabel("Track number:")
+        self.track_number_label.setFixedWidth(80)
+        self.track_number_edit = QLineEdit(str(self.data.get("tracknumber", "")))
+        self.track_number_edit.setFixedWidth(200)
+        self.track_number_edit.textChanged.connect(self.edit_tracknumber)
+        me_layout.addWidget(self.track_number_label, 5, 0)
+        me_layout.addWidget(self.track_number_edit, 5, 1)
+
+        # Total tracks edit field
+        self.total_tracks_label = QLabel("Total tracks:")
+        self.total_tracks_label.setFixedWidth(80)
+        self.total_tracks_edit = QLineEdit(str(self.data.get("totaltracks", "")))
+        self.total_tracks_edit.setFixedWidth(200)
+        self.total_tracks_edit.textChanged.connect(self.edit_totaltracks)
+        me_layout.addWidget(self.total_tracks_label, 6, 0)
+        me_layout.addWidget(self.total_tracks_edit, 6, 1)
+
+        # Disc number edit field
+        self.disc_number_label = QLabel("Disc number:")
+        self.disc_number_label.setFixedWidth(80)
+        self.disc_number_edit = QLineEdit(str(self.data.get("discnumber", "")))
+        self.disc_number_edit.setFixedWidth(200)
+        self.disc_number_edit.textChanged.connect(self.edit_discnumber)
+        me_layout.addWidget(self.disc_number_label, 7, 0)
+        me_layout.addWidget(self.disc_number_edit, 7, 1)
+
+        # Copyright edit field
+        self.copyright_label = QLabel("Copyright:")
+        self.copyright_label.setFixedWidth(80)
+        self.copyright_edit = QLineEdit(self.data.get("copyright", ""))
+        self.copyright_edit.setFixedWidth(200)
+        self.copyright_edit.textChanged.connect(self.edit_copyright)
+        me_layout.addWidget(self.copyright_label, 12, 0)
+        me_layout.addWidget(self.copyright_edit, 12, 1)
+
+        # Save button
+        self.save_button = QPushButton("Save")
+        self.save_button.setFixedWidth(125)
+        self.save_button.clicked.connect(self.save)
+        me_layout.addWidget(self.save_button, 13, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+
+        layout.addLayout(ac_layout)
+        layout.addLayout(me_layout)
+
+        self.setLayout(layout)
+
+    def edit_album_cover(self):
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getOpenFileName(self, "Select Album Cover", filter="Image Files (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            pixmap = QPixmap(file_path)
+            pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
+            self.ac_label.setPixmap(pixmap)
+            self.data["cover"] = file_path
+            print("ac updated in popup")
+    
+    def edit_title(self, text):
+        self.data["title"] = text
+    
+    def edit_artist(self, text):
+        self.data["artist"] = text
+    
+    def edit_album(self, text):
+        self.data["album"] = text
+    
+    def edit_date(self, text):
+        self.data["date"] = text
+    
+    def edit_tracknumber(self, text):
+        try:
+            self.data["tracknumber"] = int(text) if text else 0
+        except ValueError:
+            self.data["tracknumber"] = 0
+    
+    def edit_totaltracks(self, text):
+        try:
+            self.data["totaltracks"] = int(text) if text else 0
+        except ValueError:
+            self.data["totaltracks"] = 0
+    
+    def edit_discnumber(self, text):
+        try:
+            self.data["discnumber"] = int(text) if text else 0
+        except ValueError:
+            self.data["discnumber"] = 0
+
+    def edit_copyright(self, text):
+        self.data["copyright"] = text
+    
+    def save(self):
+        global loaded_audio
+        loaded_audio.audio.delete() # Clear all tags
+
+        if self.data["title"]:
+            loaded_audio.audio["©nam"] = [self.data["title"]]
+        if self.data["artist"]:
+            loaded_audio.audio["©ART"] = [self.data["artist"]]
+        if self.data["album"]:
+            loaded_audio.audio["©alb"] = [self.data["album"]]
+        if self.data["date"]:
+            loaded_audio.audio["©day"] = [self.data["date"]]
+        if self.data["copyright"]:
+            loaded_audio.audio["cprt"] = [self.data["copyright"]]
+        
+        # Handle track number and total tracks
+        if self.data["tracknumber"] or self.data["totaltracks"]:
+            track_num = self.data["tracknumber"] or 0
+            total_tracks = self.data["totaltracks"] or 0
+            loaded_audio.audio["trkn"] = [(track_num, total_tracks)]
+        
+        # Handle disc number
+        if self.data["discnumber"]:
+            loaded_audio.audio["disk"] = [(self.data["discnumber"], 0)]
+        
+        if self.data["cover"]:
+            if isinstance(self.data["cover"], str):
+                with open(self.data["cover"], "rb") as img_file:
+                    img_data = img_file.read()
+                    loaded_audio.audio["covr"] = [img_data]
+            else:
+                loaded_audio.audio["covr"] = [self.data["cover"]]
+        
+        loaded_audio.audio.save()
+        print("Metadata saved.")
+        self.close()
+
+# WAV metadata popup
+class MetadataPoupWAV(QDialog): ...
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -865,14 +1088,17 @@ class MainWindow(QWidget):
         url = f"https://api.deezer.com/search?q={query}"
         response = requests.get(url)
         if response.status_code == 200:
-        
-            data = response.json()['data'][0]
-            print(data)
-            ac_link = data['album']['cover_xl'] if data['album'] else None
+            try:
+                data = response.json()['data'][0]
+                print(data)
+                ac_link = data['album']['cover_xl'] if data['album'] else None
 
-            # Double check if the album name matches, since the search is not always accurate
-            if data['album'] and album_name.lower() not in data['album']['title'].lower():
-                print("Album name does not match, skipping album cover")
+                # Double check if the album name matches, since the search is not always accurate
+                if data['album'] and album_name.lower() not in data['album']['title'].lower():
+                    print("Album name does not match, skipping album cover")
+                    ac_link = None
+            except Exception as e:
+                print(e)
                 ac_link = None
         else:
             print("Error fetching album cover from Deezer API")
@@ -1061,6 +1287,9 @@ class MainWindow(QWidget):
         elif isinstance(loaded_audio.audio, FLAC):
             print("flac popup")
             popup = MetadataPopupFLAC()
+        elif isinstance(loaded_audio.audio, MP4):
+            print("m4a popup")
+            popup = MetadataPopupM4A()
         else:
             print("Unsupported audio format for metadata editing.")
             print(f"Loaded audio type: {type(loaded_audio.audio)}")
