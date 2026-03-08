@@ -110,18 +110,28 @@ def load_metadata(file_path: str) -> AudioMetadata:
     elif file_path.endswith(".wav"):
         audio = WAVE(file_path)
 
-        # test print tags?
-        for key in audio.keys():
-            if key == "covr":
-                print(f"{key}: [Album Cover Data]")
-                continue
+        # Uses ID3 tags
+        def _text_from_tag(tag, default: str = "Unknown") -> str:
+            if tag is None:
+                return default
+            # mutagen ID3 frames usually expose a .text list
+            if hasattr(tag, "text"):
+                try:
+                    return tag.text[0] if tag.text else default
+                except Exception:
+                    return str(tag)
+            # fallback to string conversion
+            return str(tag)
 
-            print(f"{key}: {audio[key]}")
+        title = _text_from_tag(audio.get("TIT2"), "Unknown Title")
+        artist = _text_from_tag(audio.get("TPE1"), "Unknown Artist")
+        album = _text_from_tag(audio.get("TALB"), "Unknown Album")
+        cover = audio.get("APIC:") or audio.get("APIC") or None
 
-        return AudioMetadata("Unknown Title", "Unknown Artist", "Unknown Album", None, audio) #what
+        return AudioMetadata(title, artist, album, cover, audio)
 
 # MP3 metadata popup
-class MetadataPopupMP3(QDialog):
+class MetdataPopupMP3WAV(QDialog):
     def __init__(self):
         global loaded_audio
         self.data = {
@@ -806,9 +816,6 @@ class MetadataPopupM4A(QDialog):
         print("Metadata saved.")
         self.close()
 
-# WAV metadata popup
-class MetadataPoupWAV(QDialog): ...
-
 class MainWindow(QWidget):
     def __init__(self):
         # Set basic window propreties and important variables
@@ -1281,9 +1288,9 @@ class MainWindow(QWidget):
             print("No audio loaded.")
             return
         
-        if isinstance(loaded_audio.audio, MP3):
-            print("mp3 popup")
-            popup = MetadataPopupMP3()
+        if isinstance(loaded_audio.audio, MP3) or isinstance(loaded_audio.audio, WAVE):
+            print("mp3/wav popup")
+            popup = MetdataPopupMP3WAV()
         elif isinstance(loaded_audio.audio, FLAC):
             print("flac popup")
             popup = MetadataPopupFLAC()
