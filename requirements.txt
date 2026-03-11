@@ -10,7 +10,7 @@ mutagen
 
 # Discord RPC
 pypresence
-requsts # deezer api
+requests # deezer api
 
 # Last.fm API
 pylast
