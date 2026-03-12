@@ -26,7 +26,6 @@ from mutagen.wave import WAVE
 import random
 from pypresence import Presence
 from pypresence.types import ActivityType, StatusDisplayType
-from pypresence.types import ActivityType
 from pypresence.exceptions import DiscordNotFound
 import time
 import requests
