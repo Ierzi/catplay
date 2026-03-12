@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import lru_cache
 import sys
 from typing import Any, Optional
@@ -7,6 +8,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Qt, QUrl
 from pathlib import Path
 import mimetypes
+from mutagen import FileType
 from mutagen.mp4 import MP4
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
@@ -23,10 +25,11 @@ from mutagen.id3 import (
 from mutagen.wave import WAVE
 import random
 from pypresence import Presence
-from pypresence.types import ActivityType
+from pypresence.types import ActivityType, StatusDisplayType
 import time
 import requests
 
+# Personal TODOs
 # TODO: Volume control
 # TODO: Last.fm scrobbling, love track
 # TODO: Queue management
@@ -43,33 +46,31 @@ RPC.connect()
 
 loaded_audio = None
 
+@dataclass(slots=True)
 class AudioMetadata:
-    def __init__(
-            self, 
-            title: str, 
-            artist: str,
-            album: str, 
-            cover: Any, 
-            audio: MP3 | FLAC | MP4 | WAVE
-        ) -> None:
-
-        self.title = title
-        self.artist = artist
-        self.album = album
-        self.cover = cover
-        self.audio = audio
-        self.filename = audio.filename
-        self._make_unique_hash = str(cover) + str(audio)
-    
-    def __hash__(self):
-        return hash((self.title, self.artist, self.album, self.filename, self._make_unique_hash))
+    audio: FileType
+    filename: str
+    title: str = "Unknown Title"
+    artist: str = "Unknown Artist"
+    album: str = "Unknown Album"
+    album_artist: Optional[str] = None
+    cover: Optional[Any] = None # i actually dont know the type lol 
+    comment: Optional[str] = None # aka description
+    composer: Optional[str] = None
+    genre: Optional[str] = None
+    date: Optional[str] = None
+    year: Optional[int] = None
+    discnumber: Optional[int] = None
+    tracknumber: Optional[int] = None
+    totaltracks: Optional[int] = None
+    copyright: Optional[str] = None
 
 @lru_cache(maxsize=128)
 def load_metadata(file_path: str) -> AudioMetadata:
     if file_path.endswith(".mp3"):
         audio = MP3(file_path)
 
-        def _text_from_tag(tag, default: str = "Unknown") -> str:
+        def _text_from_tag(tag, default: str = "") -> str:
             if tag is None:
                 return default
             # mutagen ID3 frames usually expose a .text list
@@ -85,27 +86,87 @@ def load_metadata(file_path: str) -> AudioMetadata:
         artist = _text_from_tag(audio.get("TPE1"), "Unknown Artist")
         album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
+        album_artist = _text_from_tag(audio.get("TSO2"))
+        comment = _text_from_tag(audio.get("COMM"))
+        composer = _text_from_tag(audio.get("TCOM"))
+        genre = _text_from_tag(audio.get("TCON"))
+        date = _text_from_tag(audio.get("TDAT"))
+        year = _text_from_tag(audio.get("TYEA"))
+        copyright = _text_from_tag(audio.get("TCOP"))
 
-        return AudioMetadata(title, artist, album, cover, audio)
+        return AudioMetadata(
+            audio=audio, 
+            filename=audio.filename,
+            title=title, 
+            artist=artist, 
+            album=album,
+            album_artist=album_artist, 
+            cover=cover,
+            comment=comment,
+            composer=composer,
+            genre=genre,
+            date=date,
+            year=year,
+            copyright=copyright
+        )
 
     elif file_path.endswith(".flac"):
         audio = FLAC(file_path)
+        for tag in audio.keys():
+            print(f"{tag}: {audio[tag]}")
         title = audio.get("title", ["Unknown Title"])[0]
         artist = audio.get("artist", ["Unknown Artist"])[0]
         album = audio.get("album", ["Unknown Album"])[0]
+        album_artist = audio.get("albumartist")[0] if audio.get("albumartist") else None
         cover = audio.pictures[0] if audio.pictures else None
+        composer = audio.get("composer")[0] if audio.get("composer") else None
+        date = audio.get("date")[0] if audio.get("date") else None
+        discnumber = audio.get("discnumber")[0] if audio.get("discnumber") else None
+        year = audio.get("year")[0] if audio.get("year") else None
+        description = audio.get("description")[0] if audio.get("description") else None
+        tracknumber = audio.get("tracknumber")[0] if audio.get("tracknumber") else None
+        genre = audio.get("genre")[0] if audio.get("genre") else None
 
-        return AudioMetadata(title, artist, album, cover, audio)
+        return AudioMetadata(
+            audio=audio, 
+            filename=audio.filename,
+            title=title, 
+            artist=artist, 
+            album=album, 
+            album_artist=album_artist,
+            cover=cover,
+            composer=composer,
+            date=date,
+            discnumber=discnumber,
+            year=year,
+            comment=description,
+            tracknumber=tracknumber,
+            genre=genre
+        )
 
     elif file_path.endswith(".m4a"):
         audio = MP4(file_path)
+
         title = audio.get("©nam", ["Unknown Title"])[0]
         artist = audio.get("©ART", ["Unknown Artist"])[0]
         album = audio.get("©alb", ["Unknown Album"])[0]
         cover = audio.get("covr", [None])[0] if audio.get("covr") else None
+        tracknumber = audio.get("trkn", [None])[0] if audio.get("trkn") else None
 
+        for tag in audio.keys():
+            if len(audio[tag][0]) > 300:
+                print(f"{tag}: [album cover data]")
+                continue
+            print(f"{tag}: {audio[tag]}")
 
-        return AudioMetadata(title, artist, album, cover, audio)
+        return AudioMetadata(
+            audio=audio, 
+            filename=audio.filename,
+            title=title, 
+            artist=artist, 
+            album=album, 
+            cover=cover
+        )
 
     elif file_path.endswith(".wav"):
         audio = WAVE(file_path)
@@ -128,7 +189,14 @@ def load_metadata(file_path: str) -> AudioMetadata:
         album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
 
-        return AudioMetadata(title, artist, album, cover, audio)
+        return AudioMetadata(
+            audio=audio, 
+            filename=audio.filename,
+            title=title, 
+            artist=artist, 
+            album=album, 
+            cover=cover
+        )
 
 # MP3 metadata popup
 class MetdataPopupMP3WAV(QDialog):
@@ -139,16 +207,16 @@ class MetdataPopupMP3WAV(QDialog):
             "artist": loaded_audio.artist,
             "album": loaded_audio.album,
             "cover": loaded_audio.cover,
-            "comment": loaded_audio.audio.get("COMM").text[0] if loaded_audio.audio.get("COMM") and hasattr(loaded_audio.audio.get("COMM"), "text") and loaded_audio.audio.get("COMM").text else "",
-            "composer": loaded_audio.audio.get("TCOM").text[0] if loaded_audio.audio.get("TCOM") and hasattr(loaded_audio.audio.get("TCOM"), "text") and loaded_audio.audio.get("TCOM").text else "",
-            "genre": loaded_audio.audio.get("TCON").text[0] if loaded_audio.audio.get("TCON") and hasattr(loaded_audio.audio.get("TCON"), "text") and loaded_audio.audio.get("TCON").text else "",
+            "comment": loaded_audio.comment,
+            "composer": loaded_audio.composer,
+            "genre": loaded_audio.genre
         } #todo: add year, track number, disc number, date
         super().__init__()
 
         # Window propreties
         self.setWindowTitle("Edit Metadata")
         self.setWindowIcon(QIcon(ressource_path(Path("assets") / "logo.png"))) # no randomness here
-        self.setFixedSize(600, 300) # half the size of MainWindow
+        self.setFixedSize(650, 400) 
 
         layout = QHBoxLayout()
 
@@ -216,10 +284,7 @@ class MetdataPopupMP3WAV(QDialog):
         # Comment edit field
         self.comment_label = QLabel("Comment:")
         self.comment_label.setFixedWidth(65)
-        comment_tag = loaded_audio.audio.get("COMM")
-        comment_text = ""
-        if comment_tag and hasattr(comment_tag, "text") and comment_tag.text:
-            comment_text = comment_tag.text[0]
+        comment_text = loaded_audio.comment
         self.comment_edit = QLineEdit(comment_text)
         self.comment_edit.setFixedWidth(200)
         self.comment_edit.textChanged.connect(self.edit_comment)
@@ -229,10 +294,7 @@ class MetdataPopupMP3WAV(QDialog):
         # Composer edit field
         self.composer_label = QLabel("Composer:")
         self.composer_label.setFixedWidth(65)
-        composer_tag = loaded_audio.audio.get("TCOM")
-        composer_text = ""
-        if composer_tag and hasattr(composer_tag, "text") and composer_tag.text:
-            composer_text = composer_tag.text[0]
+        composer_text = loaded_audio.composer
         self.composer_edit = QLineEdit(composer_text)
         self.composer_edit.setFixedWidth(200)
         self.composer_edit.textChanged.connect(self.edit_composer)
@@ -242,10 +304,7 @@ class MetdataPopupMP3WAV(QDialog):
         # Genre edit field
         self.genre_label = QLabel("Genre:")
         self.genre_label.setFixedWidth(65)
-        genre_tag = loaded_audio.audio.get("TCON")
-        genre_text = ""
-        if genre_tag and hasattr(genre_tag, "text") and genre_tag.text:
-            genre_text = genre_tag.text[0]
+        genre_text = loaded_audio.genre
         self.genre_edit = QLineEdit(genre_text)
         self.genre_edit.setFixedWidth(200)
         self.genre_edit.textChanged.connect(self.edit_genre)
@@ -338,21 +397,21 @@ class MetadataPopupFLAC(QDialog):
             "title": loaded_audio.title,
             "artist": loaded_audio.artist,
             "album": loaded_audio.album,
-            "albumartist": loaded_audio.audio.get("albumartist", [""])[0],
+            "albumartist": loaded_audio.album_artist,
             "cover": loaded_audio.cover,
-            "date": loaded_audio.audio.get("date", [""])[0],
-            "year": loaded_audio.audio.get("year", [""])[0],
-            "description": loaded_audio.audio.get("description", [""])[0],
-            "discnumber": loaded_audio.audio.get("discnumber", [""])[0],
-            "tracknumber": loaded_audio.audio.get("tracknumber", [""])[0],
-            "genre": loaded_audio.audio.get("genre", [""])[0],
-            "composer": loaded_audio.audio.get("composer", [""])[0],
+            "date": loaded_audio.date,
+            "year": loaded_audio.year,
+            "description": loaded_audio.comment,
+            "discnumber": loaded_audio.discnumber,
+            "tracknumber": loaded_audio.tracknumber,
+            "genre": loaded_audio.genre,
+            "composer": loaded_audio.composer
         }
 
         # Window propreties
         self.setWindowTitle("Edit Metadata")
         self.setWindowIcon(QIcon(ressource_path(Path("assets") / "logo.png"))) # no randomness here
-        self.setFixedSize(600, 300) # half the size of MainWindow
+        self.setFixedSize(650, 400) 
 
         layout = QHBoxLayout()
 
@@ -419,7 +478,7 @@ class MetadataPopupFLAC(QDialog):
         # Album artist edit field
         self.album_artist_label = QLabel("Album Artist:")
         self.album_artist_label.setFixedWidth(80)
-        self.album_artist_edit = QLineEdit(loaded_audio.audio.get("albumartist", [""])[0])
+        self.album_artist_edit = QLineEdit(loaded_audio.album_artist)
         self.album_artist_edit.setFixedWidth(200)
         self.album_artist_edit.textChanged.connect(self.edit_album_artist)
 
@@ -429,7 +488,7 @@ class MetadataPopupFLAC(QDialog):
         # Date edit field
         self.date_label = QLabel("Date:")
         self.date_label.setFixedWidth(80)
-        self.date_edit = QLineEdit(loaded_audio.audio.get("date", [""])[0])
+        self.date_edit = QLineEdit(loaded_audio.date)
         self.date_edit.setFixedWidth(200)
         self.date_edit.textChanged.connect(self.edit_date)
         editing_layout.addWidget(self.date_label, 4, 0)
@@ -438,7 +497,7 @@ class MetadataPopupFLAC(QDialog):
         # Year edit field
         self.year_label = QLabel("Year:")
         self.year_label.setFixedWidth(80)
-        self.year_edit = QLineEdit(loaded_audio.audio.get("year", [""])[0])
+        self.year_edit = QLineEdit(loaded_audio.year)
         self.year_edit.setFixedWidth(200)
         self.year_edit.textChanged.connect(self.edit_year)
         editing_layout.addWidget(self.year_label, 5, 0)
@@ -447,7 +506,7 @@ class MetadataPopupFLAC(QDialog):
         # Description edit field
         self.description_label = QLabel("Description:")
         self.description_label.setFixedWidth(80)
-        self.description_edit = QLineEdit(loaded_audio.audio.get("description", [""])[0])
+        self.description_edit = QLineEdit(loaded_audio.comment)
         self.description_edit.setFixedWidth(200)
         self.description_edit.textChanged.connect(self.edit_description)
         editing_layout.addWidget(self.description_label, 6, 0)
@@ -456,7 +515,7 @@ class MetadataPopupFLAC(QDialog):
         # Disc number edit field
         self.disc_number_label = QLabel("Disc number:")
         self.disc_number_label.setFixedWidth(80)
-        self.disc_number_edit = QLineEdit(loaded_audio.audio.get("discnumber", [""])[0])
+        self.disc_number_edit = QLineEdit(loaded_audio.discnumber)
         self.disc_number_edit.setFixedWidth(200)
         self.disc_number_edit.textChanged.connect(self.edit_disc_number)
         editing_layout.addWidget(self.disc_number_label, 7, 0)
@@ -466,7 +525,7 @@ class MetadataPopupFLAC(QDialog):
         # Track number edit field
         self.track_number_label = QLabel("Track number:")
         self.track_number_label.setFixedWidth(80)
-        self.track_number_edit = QLineEdit(loaded_audio.audio.get("tracknumber", [""])[0])
+        self.track_number_edit = QLineEdit(loaded_audio.tracknumber)
         self.track_number_edit.setFixedWidth(200)
         self.track_number_edit.textChanged.connect(self.edit_track_number)
         editing_layout.addWidget(self.track_number_label, 8, 0)
@@ -475,7 +534,7 @@ class MetadataPopupFLAC(QDialog):
         # Genre edit field
         self.genre_label = QLabel("Genre:")
         self.genre_label.setFixedWidth(80)
-        self.genre_edit = QLineEdit(loaded_audio.audio.get("genre", [""])[0])
+        self.genre_edit = QLineEdit(loaded_audio.genre)
         self.genre_edit.setFixedWidth(200)
         self.genre_edit.textChanged.connect(self.edit_genre)
         editing_layout.addWidget(self.genre_label, 9, 0)
@@ -484,7 +543,7 @@ class MetadataPopupFLAC(QDialog):
         # Composer edit field
         self.composer_label = QLabel("Composer:")
         self.composer_label.setFixedWidth(80)
-        self.composer_edit = QLineEdit(loaded_audio.audio.get("composer", [""])[0])
+        self.composer_edit = QLineEdit(loaded_audio.composer)
         self.composer_edit.setFixedWidth(200)
         self.composer_edit.textChanged.connect(self.edit_composer)
         editing_layout.addWidget(self.composer_label, 10, 0)
@@ -606,17 +665,17 @@ class MetadataPopupM4A(QDialog):
             "artist": loaded_audio.artist,
             "album": loaded_audio.album,
             "cover": loaded_audio.cover,
-            "tracknumber": loaded_audio.audio.get("trkn", [(0, 0)])[0][0],
-            "totaltracks": loaded_audio.audio.get("trkn", [(0, 0)])[0][1],
-            "discnumber": loaded_audio.audio.get("disk", [(0, 0)])[0][0],
-            "date": loaded_audio.audio.get("©day", [""])[0],
-            "copyright": loaded_audio.audio.get("cprt", [""])[0],
+            "tracknumber": loaded_audio.tracknumber,
+            "totaltracks": loaded_audio.totaltracks,
+            "discnumber": loaded_audio.discnumber,
+            "date": loaded_audio.date,
+            "copyright": loaded_audio.copyright,
         }
 
         # Window propreties
         self.setWindowTitle("Edit Metadata")
         self.setWindowIcon(QIcon(ressource_path(Path("assets") / "logo.png"))) # no randomness here
-        self.setFixedSize(600, 300)
+        self.setFixedSize(650, 400)
 
         layout = QHBoxLayout()
 
@@ -1097,7 +1156,6 @@ class MainWindow(QWidget):
         if response.status_code == 200:
             try:
                 data = response.json()['data'][0]
-                print(data)
                 ac_link = data['album']['cover_xl'] if data['album'] else None
 
                 # Double check if the album name matches, since the search is not always accurate
@@ -1140,13 +1198,15 @@ class MainWindow(QWidget):
 
         RPC.update(
             activity_type=ActivityType.LISTENING,
+            status_display_type=StatusDisplayType.DETAILS,
             details=track_title,
             state=f"by {artist}",
             start=start_time,
             end=end_time,
             large_image=link or "logo", # Fallback to default logo if no cover art is found
             small_image="logo" if link else None,
-            large_text=album_name
+            large_text=album_name if link else "CatPlay",
+            small_text="CatPlay" if link else None 
         )
 
     def set_position(self, position):
