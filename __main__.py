@@ -26,6 +26,8 @@ from mutagen.wave import WAVE
 import random
 from pypresence import Presence
 from pypresence.types import ActivityType, StatusDisplayType
+from pypresence.types import ActivityType
+from pypresence.exceptions import DiscordNotFound
 import time
 import requests
 
@@ -41,8 +43,13 @@ def ressource_path(relative_path: Path) -> str:
     base_path = Path(getattr(sys, '_MEIPASS', Path(__file__).parent.absolute()))
     return str(base_path / relative_path)
 
-RPC = Presence(1475462488245014568)
-RPC.connect()
+
+try:
+    RPC = Presence(1475462488245014568)
+    RPC.connect()
+except DiscordNotFound as dnf:
+    print(dnf)
+
 
 loaded_audio = None
 
@@ -1195,19 +1202,21 @@ class MainWindow(QWidget):
 
         # Get image for the current track's album cover
         link = self.get_ac_link(artist, track_title, album_name)
-
-        RPC.update(
-            activity_type=ActivityType.LISTENING,
-            status_display_type=StatusDisplayType.DETAILS,
-            details=track_title,
-            state=f"by {artist}",
-            start=start_time,
-            end=end_time,
-            large_image=link or "logo", # Fallback to default logo if no cover art is found
-            small_image="logo" if link else None,
-            large_text=album_name if link else "CatPlay",
-            small_text="CatPlay" if link else None 
-        )
+        try:
+            RPC.update(
+                activity_type=ActivityType.LISTENING,
+                status_display_type=StatusDisplayType.DETAILS,
+                details=track_title,
+                state=f"by {artist}",
+                start=start_time,
+                end=end_time,
+                large_image=link or "logo", # Fallback to default logo if no cover art is found
+                small_image="logo" if link else None,
+                large_text=album_name if link else "CatPlay",
+                small_text="CatPlay" if link else None 
+            )
+        except AssertionError:
+            print("Discord Not Connected")
 
     def set_position(self, position):
         self.player.setPosition(position)
