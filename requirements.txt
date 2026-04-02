@@ -17,3 +17,7 @@ pylast
 
 # .exe
 pyinstaller
+
+# Platform directory management
+# There is a Qt version but a dedicated library might be better
+platformdirs

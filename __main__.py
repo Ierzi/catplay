@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from functools import lru_cache
+from math import log
 import sys
 from typing import Any, Optional
+from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout, QSlider, QGridLayout, QHBoxLayout, QDialog, QLineEdit, QListWidget
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QIcon, QPixmap
@@ -11,16 +13,20 @@ import mimetypes
 from mutagen import FileType
 from mutagen.mp4 import MP4
 from mutagen.mp3 import MP3
+from mutagen.id3 import ID3
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import (
     APIC, # album cover
     TIT2, # title
     TPE1, # artist
     TALB, # album
+    TSO2, # album artist
     COMM, # comments
     TCOM, # composer
     TCON, # genre
-
+    TDAT, # date
+    TYER, # year
+    TCOP, # copyright
 )
 from mutagen.wave import WAVE
 import random
@@ -29,6 +35,10 @@ from pypresence.types import ActivityType, StatusDisplayType
 from pypresence.exceptions import DiscordNotFound
 import time
 import requests
+import logging
+from logging import StreamHandler
+from logging.handlers import TimedRotatingFileHandler
+import platformdirs
 
 # Personal TODOs
 # TODO: Volume control
@@ -36,18 +46,42 @@ import requests
 # TODO: Queue management
 # TODO: A vinyl view for the album cover, with a disc spinning would be so cool
 # TODO: Genius link to get lyrics
+# TODO: Add logging
 
 def ressource_path(relative_path: Path) -> str:
     """ Get absolute path to resource, works for dev and for PyInstaller """
     base_path = Path(getattr(sys, '_MEIPASS', Path(__file__).parent.absolute()))
     return str(base_path / relative_path)
 
+dirs = platformdirs.PlatformDirs("CatPlay", "Ierzi")
+
+cache_dir = Path(dirs.user_cache_dir)
+logs_dir = cache_dir / "logs"
+if not logs_dir.exists():
+    logs_dir.mkdir(parents=True)
+
+trf_handler = TimedRotatingFileHandler(
+    str(logs_dir / "app.log"),
+    when="midnight",
+    backupCount=7, # 7 days
+    encoding="utf-8"
+)
+
+console_handler = StreamHandler()
+
+LOGGING_LEVEL = logging.INFO
+
+logging.basicConfig(
+    level=LOGGING_LEVEL,
+    format="[%(levelname)s] [%(asctime)s] - %(message)s",
+    handlers=[trf_handler, console_handler]
+)
 
 try:
     RPC = Presence(1475462488245014568)
     RPC.connect()
 except DiscordNotFound as dnf:
-    print(dnf)
+    logging.warning(dnf)
 
 
 loaded_audio = None
@@ -87,6 +121,10 @@ def load_metadata(file_path: str) -> AudioMetadata:
                     return str(tag)
             # fallback to string conversion
             return str(tag)
+        
+        for key in audio.keys():
+            if not key.startswith("APIC"):
+                logging.debug(f"{key}: {audio[key]}")
 
         title = _text_from_tag(audio.get("TIT2"), "Unknown Title")
         artist = _text_from_tag(audio.get("TPE1"), "Unknown Artist")
@@ -96,8 +134,8 @@ def load_metadata(file_path: str) -> AudioMetadata:
         comment = _text_from_tag(audio.get("COMM"))
         composer = _text_from_tag(audio.get("TCOM"))
         genre = _text_from_tag(audio.get("TCON"))
-        date = _text_from_tag(audio.get("TDAT"))
-        year = _text_from_tag(audio.get("TYEA"))
+        date = _text_from_tag(audio.get("TDAT")) 
+        year = _text_from_tag(audio.get("TYEA")) or _text_from_tag(audio.get("TDRC")) # just learned that mutagen auto converts TYEA to TDRC if ID3 v2_4
         copyright = _text_from_tag(audio.get("TCOP"))
 
         return AudioMetadata(
@@ -119,7 +157,7 @@ def load_metadata(file_path: str) -> AudioMetadata:
     elif file_path.endswith(".flac"):
         audio = FLAC(file_path)
         for tag in audio.keys():
-            print(f"{tag}: {audio[tag]}")
+            logging.debug(f"{tag}: {audio[tag]}")
         title = audio.get("title", ["Unknown Title"])[0]
         artist = audio.get("artist", ["Unknown Artist"])[0]
         album = audio.get("album", ["Unknown Album"])[0]
@@ -161,9 +199,9 @@ def load_metadata(file_path: str) -> AudioMetadata:
 
         for tag in audio.keys():
             if len(audio[tag][0]) > 300:
-                print(f"{tag}: [album cover data]")
+                logging.debug(f"{tag}: [album cover data]")
                 continue
-            print(f"{tag}: {audio[tag]}")
+            logging.debug(f"{tag}: {audio[tag]}")
 
         return AudioMetadata(
             audio=audio, 
@@ -205,18 +243,22 @@ def load_metadata(file_path: str) -> AudioMetadata:
         )
 
 # MP3 metadata popup
-class MetdataPopupMP3WAV(QDialog):
+class MetdataPopupMP3(QDialog):
     def __init__(self):
         global loaded_audio
         self.data = {
             "title": loaded_audio.title,
             "artist": loaded_audio.artist,
             "album": loaded_audio.album,
+            "albumartist": loaded_audio.album_artist,
             "cover": loaded_audio.cover,
             "comment": loaded_audio.comment,
             "composer": loaded_audio.composer,
-            "genre": loaded_audio.genre
-        } #todo: add year, track number, disc number, date
+            "genre": loaded_audio.genre,
+            "date": loaded_audio.date,
+            "year": loaded_audio.year,
+            "copyright": loaded_audio.copyright
+        } 
         super().__init__()
 
         # Window propreties
@@ -241,7 +283,8 @@ class MetdataPopupMP3WAV(QDialog):
             try:
                 pixmap.loadFromData(ac.data)
             except Exception as e:
-                print(e)
+                logging.warning(e)
+                logging.warning("Failed to load album cover from data, trying fallback method.")
                 pixmap.loadFromData(ac) # fallback
         
         pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -287,6 +330,15 @@ class MetdataPopupMP3WAV(QDialog):
         editing_layout.addWidget(self.album_label, 2, 0)
         editing_layout.addWidget(self.album_edit, 2, 1)
 
+        # Album artist edit field
+        self.album_artist_label = QLabel("Album Artist:")
+        self.album_artist_label.setFixedWidth(65)
+        self.album_artist_edit = QLineEdit(loaded_audio.album_artist)
+        self.album_artist_edit.setFixedWidth(200)
+        self.album_artist_edit.textChanged.connect(self.edit_album_artist)
+        editing_layout.addWidget(self.album_artist_label, 3, 0)
+        editing_layout.addWidget(self.album_artist_edit, 3, 1)
+
         # Comment edit field
         self.comment_label = QLabel("Comment:")
         self.comment_label.setFixedWidth(65)
@@ -294,8 +346,8 @@ class MetdataPopupMP3WAV(QDialog):
         self.comment_edit = QLineEdit(comment_text)
         self.comment_edit.setFixedWidth(200)
         self.comment_edit.textChanged.connect(self.edit_comment)
-        editing_layout.addWidget(self.comment_label, 3, 0)
-        editing_layout.addWidget(self.comment_edit, 3, 1)
+        editing_layout.addWidget(self.comment_label, 4, 0)
+        editing_layout.addWidget(self.comment_edit, 4, 1)
         
         # Composer edit field
         self.composer_label = QLabel("Composer:")
@@ -304,8 +356,8 @@ class MetdataPopupMP3WAV(QDialog):
         self.composer_edit = QLineEdit(composer_text)
         self.composer_edit.setFixedWidth(200)
         self.composer_edit.textChanged.connect(self.edit_composer)
-        editing_layout.addWidget(self.composer_label, 4, 0)
-        editing_layout.addWidget(self.composer_edit, 4, 1)
+        editing_layout.addWidget(self.composer_label, 5, 0)
+        editing_layout.addWidget(self.composer_edit, 5, 1)
 
         # Genre edit field
         self.genre_label = QLabel("Genre:")
@@ -314,14 +366,45 @@ class MetdataPopupMP3WAV(QDialog):
         self.genre_edit = QLineEdit(genre_text)
         self.genre_edit.setFixedWidth(200)
         self.genre_edit.textChanged.connect(self.edit_genre)
-        editing_layout.addWidget(self.genre_label, 5, 0)
-        editing_layout.addWidget(self.genre_edit, 5, 1)
+        editing_layout.addWidget(self.genre_label, 6, 0)
+        editing_layout.addWidget(self.genre_edit, 6, 1)
+
+        if ID3(loaded_audio.filename).version[1] == 3:
+            # Date edit field
+            self.date_label = QLabel("Date:")
+            self.date_label.setFixedWidth(65)
+            date_text = loaded_audio.date
+            self.date_edit = QLineEdit(date_text)
+            self.date_edit.setFixedWidth(200)
+            self.date_edit.textChanged.connect(self.edit_date)
+            editing_layout.addWidget(self.date_label, 7, 0)
+            editing_layout.addWidget(self.date_edit, 7, 1)
+
+            # Year edit field
+            self.year_label = QLabel("Year:")
+            self.year_label.setFixedWidth(65)
+            year_text = loaded_audio.year
+            self.year_edit = QLineEdit(str(year_text))
+            self.year_edit.setFixedWidth(200)
+            self.year_edit.textChanged.connect(self.edit_year)
+            editing_layout.addWidget(self.year_label, 8, 0)
+            editing_layout.addWidget(self.year_edit, 8, 1)
+
+        # Copyright edit field
+        self.copyright_label = QLabel("Copyright:")
+        self.copyright_label.setFixedWidth(65)
+        copyright_text = loaded_audio.copyright
+        self.copyright_edit = QLineEdit(copyright_text)
+        self.copyright_edit.setFixedWidth(200)
+        self.copyright_edit.textChanged.connect(self.edit_copyright)
+        editing_layout.addWidget(self.copyright_label, 9, 0)
+        editing_layout.addWidget(self.copyright_edit, 9, 1)
 
         # Save button
         self.save_button = QPushButton("Save")
         self.save_button.setFixedWidth(125)
         self.save_button.clicked.connect(self.save) # Close the popup when save is clicked
-        editing_layout.addWidget(self.save_button, 6, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        editing_layout.addWidget(self.save_button, 10, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
         layout.addLayout(ac_layout)
         layout.addLayout(editing_layout)
@@ -336,7 +419,7 @@ class MetdataPopupMP3WAV(QDialog):
             pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.ac_label.setPixmap(pixmap)
             self.data["cover"] = file_path
-            print("ac updated in popup")
+            logging.info("ac updated in popup")
         
     def edit_title(self, text):
         self.data["title"] = text
@@ -347,6 +430,9 @@ class MetdataPopupMP3WAV(QDialog):
     def edit_album(self, text):
         self.data["album"] = text
     
+    def edit_album_artist(self, text):
+        self.data["albumartist"] = text
+
     def edit_comment(self, text):
         self.data["comment"] = text
     
@@ -356,42 +442,51 @@ class MetdataPopupMP3WAV(QDialog):
     def edit_genre(self, text):
         self.data["genre"] = text
     
+    def edit_date(self, text):
+        self.data["date"] = text
+    
+    def edit_year(self, text):
+        self.data["year"] = text
+    
+    def edit_copyright(self, text):
+        self.data["copyright"] = text
+    
     def save(self):
         global loaded_audio
-        loaded_audio.audio.delete() # Clear all tags 
+        version = ID3(loaded_audio.filename).version
+        loaded_audio.audio.delete() # Clear all tags
+        ID3(loaded_audio.filename).save(v2_version=version[1]) 
 
-        if self.data["title"]:
-            loaded_audio.audio["TIT2"] = TIT2(encoding=3, text=self.data["title"])
-        if self.data["artist"]:
-            loaded_audio.audio["TPE1"] = TPE1(encoding=3, text=self.data["artist"])
-        if self.data["album"]:
-            loaded_audio.audio["TALB"] = TALB(encoding=3, text=self.data["album"])
-        if self.data["cover"]:
-            if isinstance(self.data["cover"], str):
-                with open(self.data["cover"], "rb") as img_file:
-                    img_data = img_file.read()
-                    mime = mimetypes.guess_type(self.data["cover"])[0] or "image/jpeg"
-                    loaded_audio.audio["APIC"] = APIC(
-                        encoding=3,
-                        mime=mime,
-                        type=3, # cover (front)
-                        desc="",
-                        data=img_data
-                    )
-            
-            else:
-                # APIC
-                loaded_audio.audio["APIC"] = self.data.get("cover")
+        loaded_audio.audio["TIT2"] = TIT2(encoding=3, text=self.data["title"])
+        loaded_audio.audio["TPE1"] = TPE1(encoding=3, text=self.data["artist"])
+        loaded_audio.audio["TALB"] = TALB(encoding=3, text=self.data["album"])
+        loaded_audio.audio["TSO2"] = TSO2(encoding=3, text=self.data["albumartist"])
+        loaded_audio.audio["COMM"] = COMM(encoding=3, text=self.data["comment"])
+        loaded_audio.audio["TCOM"] = TCOM(encoding=3, text=self.data["composer"])
+        loaded_audio.audio["TCON"] = TCON(encoding=3, text=self.data["genre"])
+        if ID3(loaded_audio.filename).version[1] == 3: # ID3 v2.3
+            loaded_audio.audio["TDAT"] = TDAT(encoding=3, text=self.data["date"])
+            loaded_audio.audio["TYER"] = TYER(encoding=3, text=str(self.data["year"]))
+        loaded_audio.audio["TCOP"] = TCOP(encoding=3, text=self.data["copyright"])
 
-        if self.data["comment"]:
-            loaded_audio.audio["COMM"] = COMM(encoding=3, text=self.data["comment"])
-        if self.data["composer"]:
-            loaded_audio.audio["TCOM"] = TCOM(encoding=3, text=self.data["composer"])
-        if self.data["genre"]:
-            loaded_audio.audio["TCON"] = TCON(encoding=3, text=self.data["genre"])
+        if isinstance(self.data["cover"], str):
+            with open(self.data["cover"], "rb") as img_file:
+                img_data = img_file.read()
+                mime = mimetypes.guess_type(self.data["cover"])[0] or "image/jpeg"
+                loaded_audio.audio["APIC"] = APIC(
+                    encoding=3,
+                    mime=mime,
+                    type=3, # cover (front)
+                    desc="",
+                    data=img_data
+                )
+        
+        else:
+            # APIC
+            loaded_audio.audio["APIC"] = self.data.get("cover")
         
         loaded_audio.audio.save()
-        print("Metadata saved.")
+        logging.info("Metadata saved.")
         self.close()
 
 # FLAC metadata popup
@@ -436,7 +531,8 @@ class MetadataPopupFLAC(QDialog):
             try:
                 pixmap.loadFromData(ac.data)
             except Exception as e:
-                print(e)
+                logging.warning(e)
+                logging.warning("Failed to load album cover from data, trying fallback method.")
                 pixmap.loadFromData(ac) # fallback
         
         pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -575,7 +671,7 @@ class MetadataPopupFLAC(QDialog):
             pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.ac_label.setPixmap(pixmap)
             self.data["cover"] = file_path
-            print("ac updated in popup")
+            logging.info("ac updated in popup")
     
     def edit_title(self, text):
         self.data["title"] = text
@@ -657,7 +753,7 @@ class MetadataPopupFLAC(QDialog):
                 loaded_audio.audio.add_picture(picture)
         
         loaded_audio.audio.save()
-        print("Metadata saved.")
+        logging.info("Metadata saved.")
         self.close()
 
 # M4A metadata popup
@@ -700,7 +796,8 @@ class MetadataPopupM4A(QDialog):
             try:
                 pixmap.loadFromData(ac.data)
             except Exception as e:
-                print(e)
+                logging.warning(e)
+                logging.warning("Failed to load album cover from data, trying fallback method.")
                 pixmap.loadFromData(ac) # fallback
         
         pixmap = pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -809,7 +906,7 @@ class MetadataPopupM4A(QDialog):
             pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.ac_label.setPixmap(pixmap)
             self.data["cover"] = file_path
-            print("ac updated in popup")
+            logging.info("ac updated in popup")
     
     def edit_title(self, text):
         self.data["title"] = text
@@ -878,7 +975,7 @@ class MetadataPopupM4A(QDialog):
                 loaded_audio.audio["covr"] = [self.data["cover"]]
         
         loaded_audio.audio.save()
-        print("Metadata saved.")
+        logging.info("Metadata saved.")
         self.close()
 
 class MainWindow(QWidget):
@@ -1086,7 +1183,7 @@ class MainWindow(QWidget):
         else:
             self.queue.insert(dest_row, moved_item)
 
-        print(f"{self.queue=}")
+        logging.debug(f"{self.queue=}")
 
         self.update_pretty_queue()
     
@@ -1097,7 +1194,8 @@ class MainWindow(QWidget):
         try:
             pixmap.loadFromData(cover_art.data)
         except Exception as e:
-            print(e)
+            logging.warning(e)
+            logging.warning("Failed to load album cover from data, trying fallback method.")
             pixmap.loadFromData(cover_art) # fallback
         pixmap = pixmap.scaled(250, 250, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
         self.album_cover.setPixmap(pixmap)
@@ -1136,9 +1234,9 @@ class MainWindow(QWidget):
             random.shuffle(self.queue)
             self.queue.insert(0, loaded_audio.filename)
             self.update_pretty_queue()
-            print("Queue shuffled.")
+            logging.info("Queue shuffled.")
         else:
-            print("No songs in the queue to shuffle.")
+            logging.info("No songs in the queue to shuffle.")
     
     def update_pretty_queue(self):
         global loaded_audio
@@ -1158,6 +1256,7 @@ class MainWindow(QWidget):
         # * Deezer API yay
         query = f"{artist} {track_title}"
         url = f"https://api.deezer.com/search?q={query}"
+        logging.debug(f"Fetching album cover from Deezer API with url: {url}")
         response = requests.get(url)
         if response.status_code == 200:
             try:
@@ -1166,13 +1265,13 @@ class MainWindow(QWidget):
 
                 # Double check if the album name matches, since the search is not always accurate
                 if data['album'] and album_name.lower() not in data['album']['title'].lower():
-                    print("Album name does not match, skipping album cover")
+                    logging.info("Album name does not match, skipping album cover")
                     ac_link = None
             except Exception as e:
-                print(e)
+                logging.warning(e)
                 ac_link = None
         else:
-            print("Error fetching album cover from Deezer API")
+            logging.warning("Error fetching album cover from Deezer API")
 
         if ac_link:
             return ac_link
@@ -1185,7 +1284,7 @@ class MainWindow(QWidget):
         }
         response = requests.get(catplay_url, params=params)
         if response.status_code != 200:
-            print("Error fetching album cover from CatPlay API")
+            logging.error("Error fetching album cover from CatPlay API")
             return None
         
         data = response.json()
@@ -1215,7 +1314,7 @@ class MainWindow(QWidget):
                 small_text="CatPlay" if link else None 
             )
         except AssertionError:
-            print("Discord Not Connected")
+            logging.info("Discord Not Connected")
 
     def set_position(self, position):
         self.player.setPosition(position)
@@ -1229,18 +1328,18 @@ class MainWindow(QWidget):
             pixmap = pixmap.scaled(250, 250, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation) 
             self.album_cover.setPixmap(pixmap)
         
-        print("Image loaded.")
+        logging.info("Image loaded.")
 
     def load_metadata_from_path(self, file_path: str):
         global loaded_audio
-        print(f"Loading metadata from: {file_path}")
+        logging.info(f"Loading metadata from: {file_path}")
         if file_path:
             loaded_audio = load_metadata(file_path)
             self.info_label.setText(f"Title: {loaded_audio.title}\nArtist: {loaded_audio.artist}\nAlbum: {loaded_audio.album}")
             if loaded_audio.cover:
                 self._set_cover_art(loaded_audio.cover)
             else:
-                print("No cover art found in metadata.")
+                logging.info("No cover art found in metadata.")
 
     def load_metadata(self):
         # Dialog to select a music file
@@ -1256,31 +1355,31 @@ class MainWindow(QWidget):
             self.is_playing = True
             self.is_paused = False
             self.start_song = int(time.time())
-            print("Playing song...")
+            logging.info("Playing song...")
         else:
-            print("No audio file loaded.")
+            logging.info("No audio file loaded.")
 
     def stop_song(self):
         if self.is_playing:
             self.player.stop()
             self.is_playing = False
             self.is_paused = False
-            print("Stopping song...")
+            logging.info("Stopping song...")
         else:
-            print("No song is currently playing.")
+            logging.info("No song is currently playing.")
 
     def toggle_pause(self):
         if self.is_playing:
             if self.is_paused:
                 self.player.play()
                 self.is_paused = False
-                print("Resuming song...")
+                logging.info("Resuming song...")
             else:
                 self.player.pause()
                 self.is_paused = True
-                print("Pausing song...")
+                logging.info("Pausing song...")
         else:
-            print("No song is currently playing.")
+            logging.info("No song is currently playing.")
 
     def load_folder(self):
         # Dialog to select a folder
@@ -1288,7 +1387,7 @@ class MainWindow(QWidget):
         folder_dialog.setFileMode(QFileDialog.FileMode.Directory)
         folder_path = folder_dialog.getExistingDirectory(self, "Select Music Folder")
         if folder_path:
-            print(f"Selected folder: {folder_path}")
+            logging.info(f"Selected folder: {folder_path}")
             audio_paths: list[Path] = []
             for ext in ("*.mp3", "*.flac", "*.wav", "*.m4a"):
                 audio_paths.extend(Path(folder_path).glob(ext))
@@ -1301,14 +1400,14 @@ class MainWindow(QWidget):
 
             # If not, just pray it's in order
 
-            print(audio_files)
+            logging.info(audio_files)
 
         self.queue = audio_files 
         
         # Load first track
         if audio_files:
             first_track = audio_files[0]
-            print(f"Loading first track: {first_track}")
+            logging.info(f"Loading first track: {first_track}")
             self.load_metadata_from_path(first_track)
     
         self.update_pretty_queue()
@@ -1319,12 +1418,12 @@ class MainWindow(QWidget):
             current_index = self.queue.index(loaded_audio.filename) if loaded_audio else -1
             next_index = (current_index + 1) % len(self.queue)
             next_track = self.queue[next_index]
-            print(f"Loading next track: {next_track}")
+            logging.info(f"Loading next track: {next_track}")
             self.load_metadata_from_path(next_track)
             self.play_song()
             self.update_pretty_queue()
         else:
-            print("No songs in the queue.")
+            logging.info("No songs in the queue.")
     
     def previous_song(self):
         global loaded_audio
@@ -1332,12 +1431,12 @@ class MainWindow(QWidget):
             current_index = self.queue.index(loaded_audio.filename) if loaded_audio else -1
             prev_index = (current_index - 1) % len(self.queue)
             prev_track = self.queue[prev_index]
-            print(f"Loading previous track: {prev_track}")
+            logging.info(f"Loading previous track: {prev_track}")
             self.load_metadata_from_path(prev_track)
             self.play_song()
             self.update_pretty_queue()
         else:
-            print("No songs in the queue.")
+            logging.info("No songs in the queue.")
 
     def handle_media_status(self, status):
         if status == QMediaPlayer.MediaStatus.EndOfMedia and self.queue:
@@ -1353,21 +1452,24 @@ class MainWindow(QWidget):
     def edit_metadata_popup(self):
         global loaded_audio
         if not loaded_audio:
-            print("No audio loaded.")
+            logging.info("No audio loaded.")
             return
         
         if isinstance(loaded_audio.audio, MP3) or isinstance(loaded_audio.audio, WAVE):
-            print("mp3/wav popup")
-            popup = MetdataPopupMP3WAV()
+            logging.info("mp3 popup")
+            popup = MetdataPopupMP3()
         elif isinstance(loaded_audio.audio, FLAC):
-            print("flac popup")
+            logging.info("flac popup")
             popup = MetadataPopupFLAC()
         elif isinstance(loaded_audio.audio, MP4):
-            print("m4a popup")
+            logging.info("m4a popup")
             popup = MetadataPopupM4A()
+        elif isinstance(loaded_audio.audio, WAVE):
+            logging.info("wav popup")
+            pass
         else:
-            print("Unsupported audio format for metadata editing.")
-            print(f"Loaded audio type: {type(loaded_audio.audio)}")
+            logging.info("Unsupported audio format for metadata editing.")
+            logging.info(f"Loaded audio type: {type(loaded_audio.audio)}")
             return
         popup.exec()
 
