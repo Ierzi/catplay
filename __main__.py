@@ -1,9 +1,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from math import log
 import sys
 from typing import Any, Optional
-from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QFileDialog, QVBoxLayout, QSlider, QGridLayout, QHBoxLayout, QDialog, QLineEdit, QListWidget
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QIcon, QPixmap
@@ -13,7 +11,6 @@ import mimetypes
 from mutagen import FileType
 from mutagen.mp4 import MP4
 from mutagen.mp3 import MP3
-from mutagen.id3 import ID3
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import (
     APIC, # album cover
@@ -26,6 +23,7 @@ from mutagen.id3 import (
     TCON, # genre
     TDAT, # date
     TYER, # year
+    TDRC, # recording date (v2.4)
     TCOP, # copyright
 )
 from mutagen.wave import WAVE
@@ -39,6 +37,7 @@ import logging
 from logging import StreamHandler
 from logging.handlers import TimedRotatingFileHandler
 import platformdirs
+import threading
 
 # Personal TODOs
 # TODO: Volume control
@@ -47,6 +46,8 @@ import platformdirs
 # TODO: A vinyl view for the album cover, with a disc spinning would be so cool
 # TODO: Genius link to get lyrics
 # TODO: Add logging
+
+loading_start_time = time.time()
 
 def ressource_path(relative_path: Path) -> str:
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -69,7 +70,7 @@ trf_handler = TimedRotatingFileHandler(
 
 console_handler = StreamHandler()
 
-LOGGING_LEVEL = logging.INFO
+LOGGING_LEVEL = logging.DEBUG
 
 logging.basicConfig(
     level=LOGGING_LEVEL,
@@ -77,12 +78,25 @@ logging.basicConfig(
     handlers=[trf_handler, console_handler]
 )
 
-try:
-    RPC = Presence(1475462488245014568)
-    RPC.connect()
-except DiscordNotFound as dnf:
-    logging.warning(dnf)
+# Putting this in a seperate thread just reduced loading times by 0.3 to TWENTY SECONDS LMAO
+def init_discord_rpc():
+    global RPC
+    try:
+        started_rpc_time = time.time()
+        logging.debug("discord rpc init...")
+        RPC = Presence(1475462488245014568)
+        RPC.connect()
+        ended_rpc_time = time.time()
+        logging.debug(f"discord rpc initialized in {ended_rpc_time - started_rpc_time:.2f} seconds")
+    except DiscordNotFound as dnf:
+        logging.warning(dnf)
+    except Exception as e:
+        logging.warning(f"Failed to connect to Discord but another exception idk: {e}")
 
+RPC = None
+rpc_thread = threading.Thread(target=init_discord_rpc, daemon=True)
+rpc_thread.daemon = True
+rpc_thread.start()
 
 loaded_audio = None
 
@@ -131,11 +145,11 @@ def load_metadata(file_path: str) -> AudioMetadata:
         album = _text_from_tag(audio.get("TALB"), "Unknown Album")
         cover = audio.get("APIC:") or audio.get("APIC") or None
         album_artist = _text_from_tag(audio.get("TSO2"))
-        comment = _text_from_tag(audio.get("COMM"))
+        comment = _text_from_tag(audio.get("COMM")) or _text_from_tag(audio.get("COMM::XXX")) or _text_from_tag(audio.get("COMM::eng")) 
         composer = _text_from_tag(audio.get("TCOM"))
         genre = _text_from_tag(audio.get("TCON"))
-        date = _text_from_tag(audio.get("TDAT")) 
-        year = _text_from_tag(audio.get("TYEA")) or _text_from_tag(audio.get("TDRC")) # just learned that mutagen auto converts TYEA to TDRC if ID3 v2_4
+        date = _text_from_tag(audio.get("TDAT")) or _text_from_tag(audio.get("TDRC")) # just learned that mutagen auto converts TYEA to TDRC if ID3 v2_4
+        year = _text_from_tag(audio.get("TYEA")) 
         copyright = _text_from_tag(audio.get("TCOP"))
 
         return AudioMetadata(
@@ -243,7 +257,7 @@ def load_metadata(file_path: str) -> AudioMetadata:
         )
 
 # MP3 metadata popup
-class MetdataPopupMP3(QDialog):
+class MetadataPopupMP3(QDialog):
     def __init__(self):
         global loaded_audio
         self.data = {
@@ -261,6 +275,9 @@ class MetdataPopupMP3(QDialog):
         } 
         super().__init__()
 
+        # Get ID3 version
+        id3_version = loaded_audio.audio.tags.version if loaded_audio.audio.tags else (2, 4, 0)
+        
         # Window propreties
         self.setWindowTitle("Edit Metadata")
         self.setWindowIcon(QIcon(ressource_path(Path("assets") / "logo.png"))) # no randomness here
@@ -333,7 +350,7 @@ class MetdataPopupMP3(QDialog):
         # Album artist edit field
         self.album_artist_label = QLabel("Album Artist:")
         self.album_artist_label.setFixedWidth(65)
-        self.album_artist_edit = QLineEdit(loaded_audio.album_artist)
+        self.album_artist_edit = QLineEdit(loaded_audio.album_artist or "")
         self.album_artist_edit.setFixedWidth(200)
         self.album_artist_edit.textChanged.connect(self.edit_album_artist)
         editing_layout.addWidget(self.album_artist_label, 3, 0)
@@ -342,7 +359,7 @@ class MetdataPopupMP3(QDialog):
         # Comment edit field
         self.comment_label = QLabel("Comment:")
         self.comment_label.setFixedWidth(65)
-        comment_text = loaded_audio.comment
+        comment_text = loaded_audio.comment or ""
         self.comment_edit = QLineEdit(comment_text)
         self.comment_edit.setFixedWidth(200)
         self.comment_edit.textChanged.connect(self.edit_comment)
@@ -352,7 +369,7 @@ class MetdataPopupMP3(QDialog):
         # Composer edit field
         self.composer_label = QLabel("Composer:")
         self.composer_label.setFixedWidth(65)
-        composer_text = loaded_audio.composer
+        composer_text = loaded_audio.composer or ""
         self.composer_edit = QLineEdit(composer_text)
         self.composer_edit.setFixedWidth(200)
         self.composer_edit.textChanged.connect(self.edit_composer)
@@ -362,49 +379,52 @@ class MetdataPopupMP3(QDialog):
         # Genre edit field
         self.genre_label = QLabel("Genre:")
         self.genre_label.setFixedWidth(65)
-        genre_text = loaded_audio.genre
+        genre_text = loaded_audio.genre or ""
         self.genre_edit = QLineEdit(genre_text)
         self.genre_edit.setFixedWidth(200)
         self.genre_edit.textChanged.connect(self.edit_genre)
         editing_layout.addWidget(self.genre_label, 6, 0)
         editing_layout.addWidget(self.genre_edit, 6, 1)
 
-        if ID3(loaded_audio.filename).version[1] == 3:
-            # Date edit field
-            self.date_label = QLabel("Date:")
-            self.date_label.setFixedWidth(65)
-            date_text = loaded_audio.date
-            self.date_edit = QLineEdit(date_text)
-            self.date_edit.setFixedWidth(200)
-            self.date_edit.textChanged.connect(self.edit_date)
-            editing_layout.addWidget(self.date_label, 7, 0)
-            editing_layout.addWidget(self.date_edit, 7, 1)
+        # Date edit field
+        self.date_label = QLabel("Date:")
+        self.date_label.setFixedWidth(65)
+        date_text = loaded_audio.date or ""
+        self.date_edit = QLineEdit(str(date_text))
+        self.date_edit.setFixedWidth(200)
+        self.date_edit.textChanged.connect(self.edit_date)
+        editing_layout.addWidget(self.date_label, 7, 0)
+        editing_layout.addWidget(self.date_edit, 7, 1)
 
-            # Year edit field
+        # Year edit field (only for ID3 v2.3)
+        if id3_version[1] == 3:
             self.year_label = QLabel("Year:")
             self.year_label.setFixedWidth(65)
             year_text = loaded_audio.year
-            self.year_edit = QLineEdit(str(year_text))
+            self.year_edit = QLineEdit(str(year_text) if year_text is not None else "")
             self.year_edit.setFixedWidth(200)
             self.year_edit.textChanged.connect(self.edit_year)
             editing_layout.addWidget(self.year_label, 8, 0)
             editing_layout.addWidget(self.year_edit, 8, 1)
+            copyright_row = 9
+        else:
+            copyright_row = 8
 
         # Copyright edit field
         self.copyright_label = QLabel("Copyright:")
         self.copyright_label.setFixedWidth(65)
-        copyright_text = loaded_audio.copyright
+        copyright_text = loaded_audio.copyright or ""
         self.copyright_edit = QLineEdit(copyright_text)
         self.copyright_edit.setFixedWidth(200)
         self.copyright_edit.textChanged.connect(self.edit_copyright)
-        editing_layout.addWidget(self.copyright_label, 9, 0)
-        editing_layout.addWidget(self.copyright_edit, 9, 1)
+        editing_layout.addWidget(self.copyright_label, copyright_row, 0)
+        editing_layout.addWidget(self.copyright_edit, copyright_row, 1)
 
         # Save button
         self.save_button = QPushButton("Save")
         self.save_button.setFixedWidth(125)
         self.save_button.clicked.connect(self.save) # Close the popup when save is clicked
-        editing_layout.addWidget(self.save_button, 10, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        editing_layout.addWidget(self.save_button, copyright_row + 1, 1, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
         layout.addLayout(ac_layout)
         layout.addLayout(editing_layout)
@@ -453,28 +473,34 @@ class MetdataPopupMP3(QDialog):
     
     def save(self):
         global loaded_audio
-        version = ID3(loaded_audio.filename).version
+        if not loaded_audio.audio.tags:
+            loaded_audio.audio.add_tags()
+        version = loaded_audio.audio.tags.version
+        encoding = 1 if version[1] == 3 else 3  # UTF-16 for v2.3, UTF-8 for v2.4
         loaded_audio.audio.delete() # Clear all tags
-        ID3(loaded_audio.filename).save(v2_version=version[1]) 
+        loaded_audio.audio.tags.version = (2, version[1], 0)  # Ensure version is set
 
-        loaded_audio.audio["TIT2"] = TIT2(encoding=3, text=self.data["title"])
-        loaded_audio.audio["TPE1"] = TPE1(encoding=3, text=self.data["artist"])
-        loaded_audio.audio["TALB"] = TALB(encoding=3, text=self.data["album"])
-        loaded_audio.audio["TSO2"] = TSO2(encoding=3, text=self.data["albumartist"])
-        loaded_audio.audio["COMM"] = COMM(encoding=3, text=self.data["comment"])
-        loaded_audio.audio["TCOM"] = TCOM(encoding=3, text=self.data["composer"])
-        loaded_audio.audio["TCON"] = TCON(encoding=3, text=self.data["genre"])
-        if ID3(loaded_audio.filename).version[1] == 3: # ID3 v2.3
-            loaded_audio.audio["TDAT"] = TDAT(encoding=3, text=self.data["date"])
-            loaded_audio.audio["TYER"] = TYER(encoding=3, text=str(self.data["year"]))
-        loaded_audio.audio["TCOP"] = TCOP(encoding=3, text=self.data["copyright"])
+        loaded_audio.audio["TIT2"] = TIT2(encoding=encoding, text=self.data["title"])
+        loaded_audio.audio["TPE1"] = TPE1(encoding=encoding, text=self.data["artist"])
+        loaded_audio.audio["TALB"] = TALB(encoding=encoding, text=self.data["album"])
+        loaded_audio.audio["TSO2"] = TSO2(encoding=encoding, text=self.data["albumartist"])
+        loaded_audio.audio["COMM"] = COMM(encoding=encoding, lang='eng', desc='', text=self.data["comment"])
+        loaded_audio.audio["TCOM"] = TCOM(encoding=encoding, text=self.data["composer"])
+        loaded_audio.audio["TCON"] = TCON(encoding=encoding, text=self.data["genre"])
+        if version[1] == 3:  # ID3 v2.3
+            loaded_audio.audio["TDAT"] = TDAT(encoding=encoding, text=self.data["date"])
+            loaded_audio.audio["TYER"] = TYER(encoding=encoding, text=str(self.data["year"]))
+        else:  # ID3 v2.4 - use date field for TDRC
+            if self.data["date"]:
+                loaded_audio.audio["TDRC"] = TDRC(encoding=encoding, text=self.data["date"])
+        loaded_audio.audio["TCOP"] = TCOP(encoding=encoding, text=self.data["copyright"])
 
         if isinstance(self.data["cover"], str):
             with open(self.data["cover"], "rb") as img_file:
                 img_data = img_file.read()
                 mime = mimetypes.guess_type(self.data["cover"])[0] or "image/jpeg"
                 loaded_audio.audio["APIC"] = APIC(
-                    encoding=3,
+                    encoding=encoding,
                     mime=mime,
                     type=3, # cover (front)
                     desc="",
@@ -1457,7 +1483,7 @@ class MainWindow(QWidget):
         
         if isinstance(loaded_audio.audio, MP3) or isinstance(loaded_audio.audio, WAVE):
             logging.info("mp3 popup")
-            popup = MetdataPopupMP3()
+            popup = MetadataPopupMP3()
         elif isinstance(loaded_audio.audio, FLAC):
             logging.info("flac popup")
             popup = MetadataPopupFLAC()
@@ -1477,8 +1503,12 @@ class MainWindow(QWidget):
         self.load_metadata_from_path(loaded_audio.filename)
 
 def main():
+    global loading_start_time
+    
     app = QApplication(sys.argv)
     window = MainWindow()
+    loading_end_time = time.time()
+    logging.info(f"Loaded app {loading_end_time - loading_start_time:.2f} seconds.")
     window.show()
     sys.exit(app.exec())
 
