@@ -48,13 +48,14 @@ import threading
 # TODO: Fix RPC song progress bar when skipping through the song
 # TODO: Skip to song when double clicking the song in the queue
 # TODO: Settings menu
-# -- Enable/disable logs
-# -- Open logs folder
-# -- Change log level
-# -- Change timed rotating file handler settings (when to rotate, how many backups to keep, etc)
-# -- Enable/disable RPC
-# -- Scrobbling options
-# -- Theme options (dark mode, accent color, etc)
+# ---- Enable/disable logs
+# ---- Open logs folder
+# ---- Change log level
+# ---- Change timed rotating file handler settings (when to rotate, how many backups to keep, etc)
+# ---- Enable/disable RPC
+# ---- Scrobbling options
+# ---- Theme options (dark mode, accent color, etc)
+# TODO: Auto update app
 
 loading_start_time = time.time()
 

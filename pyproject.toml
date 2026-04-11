@@ -4,4 +4,4 @@ version = "2.2.1"
 description = "python music player idk"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pyside6", "shiboken6", "mutagen", "pypresence", "requests", "pylast", "pyinstaller"]
+dependencies = ["pyside6", "shiboken6", "mutagen", "pypresence", "requests", "pylast", "pyinstaller", "platformdirs"]
