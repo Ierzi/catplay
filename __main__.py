@@ -45,7 +45,16 @@ import threading
 # TODO: Queue management
 # TODO: A vinyl view for the album cover, with a disc spinning would be so cool
 # TODO: Genius link to get lyrics
-# TODO: Add logging
+# TODO: Fix RPC song progress bar when skipping through the song
+# TODO: Skip to song when double clicking the song in the queue
+# TODO: Settings menu
+# -- Enable/disable logs
+# -- Open logs folder
+# -- Change log level
+# -- Change timed rotating file handler settings (when to rotate, how many backups to keep, etc)
+# -- Enable/disable RPC
+# -- Scrobbling options
+# -- Theme options (dark mode, accent color, etc)
 
 loading_start_time = time.time()
 
