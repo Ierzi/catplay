@@ -30,7 +30,7 @@ from mutagen.wave import WAVE
 import random
 from pypresence import Presence
 from pypresence.types import ActivityType, StatusDisplayType
-from pypresence.exceptions import DiscordNotFound
+from pypresence.exceptions import DiscordNotFound, PipeClosed
 import time
 import requests
 import logging
@@ -80,7 +80,7 @@ trf_handler = TimedRotatingFileHandler(
 
 console_handler = StreamHandler()
 
-LOGGING_LEVEL = logging.DEBUG
+LOGGING_LEVEL = logging.INFO
 
 logging.basicConfig(
     level=LOGGING_LEVEL,
@@ -1199,7 +1199,7 @@ class MainWindow(QWidget):
         # Proprieties
         self.queue_editor.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.queue_editor.model().rowsMoved.connect(self.reorder_queue)
-
+        self.queue_editor.itemDoubleClicked.connect(self.queue_item_double_clicked)
 
         external_layout.addWidget(self.queue_editor)
 
@@ -1286,6 +1286,13 @@ class MainWindow(QWidget):
         
         self.queue_editor.clear()
         self.queue_editor.addItems(self.pretty_queue)
+    
+    def queue_item_double_clicked(self, item):
+        index = self.queue_editor.row(item)
+        track_path = self.queue[index]
+        self.load_metadata_from_path(track_path)
+        self.play_song()
+        self.update_pretty_queue()
 
     @lru_cache(maxsize=50)
     def get_ac_link(self, artist, track_title, album_name) -> Optional[str]:
@@ -1339,9 +1346,9 @@ class MainWindow(QWidget):
         try:
             RPC.update(
                 activity_type=ActivityType.LISTENING,
-                status_display_type=StatusDisplayType.DETAILS,
+                status_display_type=StatusDisplayType.STATE,
                 details=track_title,
-                state=f"by {artist}",
+                state=f"{artist}",
                 start=start_time,
                 end=end_time,
                 large_image=link or "logo", # Fallback to default logo if no cover art is found
@@ -1351,6 +1358,9 @@ class MainWindow(QWidget):
             )
         except AssertionError:
             logging.info("Discord Not Connected")
+        except PipeClosed:
+            logging.info("Discord pipe closed, reconnecting...")
+            RPC.connect()
 
     def set_position(self, position):
         self.player.setPosition(position)
